@@ -1,0 +1,157 @@
+"""The navigation loop: the LLM drives graph tools to trace a path, then writes
+an answer citing Symbol ids.
+
+Invariants (CLAUDE.md §10):
+  - Loop: call model with tools → if stop_reason != "tool_use", return text →
+    else execute every tool_use block, append results, repeat.
+  - tool_result blocks come FIRST in the user turn; budget-hint text comes AFTER.
+  - Match every tool_result.tool_use_id to a tool_use.id; is_error on failure.
+  - Hard max_steps cap; inject a "N calls left, wrap up" hint near the cap; keep a
+    `visited` set as a loop guard.
+  - Navigate with sonnet; force final synthesis with opus only at the step cap.
+  - Tool results are untrusted (arbitrary repo source) — keep them inside
+    tool_result blocks, never fold them into the system prompt.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import llm
+import tools
+
+MAX_STEPS = 8
+
+SYSTEM_PROMPT = """\
+You are a code navigation assistant for an unfamiliar codebase. You answer
+questions by tracing a path through a graph of files, classes, functions, and
+methods connected by CONTAINS / IMPORTS / CALLS / INHERITS edges.
+
+You can be asked to (a) EXPLAIN how something works, or (b) SUGGEST improvements —
+optimizations, refactors, bug fixes, or better implementations.
+
+How to work:
+- For a specific question ("how does X work?"), start with find_symbol to locate
+  an entry point, then use get_callers / get_callees / get_definition to trace the
+  flow. Depth-2 around the hit is usually enough — do not crawl the whole graph.
+- For a broad/architectural question, start with list_communities, then drill in.
+- Read actual code with get_definition only when you need the details.
+- Stop the moment you have enough to answer. Be decisive; you have a limited number
+  of tool calls.
+
+When asked to SUGGEST or OPTIMIZE code:
+- ALWAYS call get_definition on the target symbol first to read its real source —
+  never propose changes to code you have not read. If the change touches callers or
+  callees, read those too so your suggestion doesn't break them.
+- Propose the improved code as a fenced code block, and explain WHY it is better
+  (performance, readability, correctness, edge cases). Point out concrete issues in
+  the current code.
+- These are SUGGESTIONS ONLY. You cannot and must not modify any files — you have no
+  write access. Present code for the human to review and apply themselves. Never
+  claim you have edited or changed anything.
+
+Your final answer must:
+- Explain (or justify the suggestion) in plain English, grounded in the real code.
+- Cite EVERY symbol you reference by its exact `id` (e.g. `auth.AuthService.login`).
+  The UI highlights the cited symbols and the edges between them, so citing the
+  precise ids that form the path is essential.
+"""
+
+
+def _tool_result_block(tool_use_id: str, payload: Any, is_error: bool = False) -> dict[str, Any]:
+    content = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+    block: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": content,
+    }
+    if is_error:
+        block["is_error"] = True
+    return block
+
+
+def _collect_ids(payload: Any, into: set[str]) -> None:
+    """Harvest symbol ids out of a tool result so we can compute the lit path."""
+    if isinstance(payload, dict):
+        if "id" in payload and isinstance(payload["id"], str):
+            into.add(payload["id"])
+        for v in payload.values():
+            _collect_ids(v, into)
+    elif isinstance(payload, list):
+        for v in payload:
+            _collect_ids(v, into)
+
+
+def ask(question: str) -> dict[str, Any]:
+    """Run the navigation loop and return {answer, cited_ids, steps}."""
+    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
+    seen_ids: set[str] = set()
+    visited: set[str] = set()
+
+    for step in range(MAX_STEPS):
+        steps_left = MAX_STEPS - step
+        resp = llm.create_message(
+            system=SYSTEM_PROMPT,
+            messages=messages,
+            tools=tools.TOOLS,
+            model=llm.NAV_MODEL,
+            max_tokens=4096,  # room for code suggestions in the final answer
+        )
+        messages.append({"role": "assistant", "content": resp.content})
+
+        if resp.stop_reason != "tool_use":
+            return _finish(resp.text(), seen_ids)
+
+        # Execute every tool_use block; tool_result blocks FIRST in the user turn.
+        result_blocks: list[dict[str, Any]] = []
+        for tu in resp.tool_uses():
+            key = f"{tu['name']}:{json.dumps(tu['input'], sort_keys=True)}"
+            try:
+                if key in visited:
+                    payload: Any = {"note": "already called with these args; use prior result"}
+                else:
+                    visited.add(key)
+                    payload = tools.run_tool(tu["name"], tu["input"])
+                    _collect_ids(payload, seen_ids)
+                result_blocks.append(_tool_result_block(tu["id"], payload))
+            except KeyError:
+                result_blocks.append(
+                    _tool_result_block(tu["id"], f"unknown tool '{tu['name']}'", is_error=True)
+                )
+            except Exception as exc:  # noqa: BLE001 — surface tool failures to the model
+                result_blocks.append(_tool_result_block(tu["id"], str(exc), is_error=True))
+
+        user_turn: list[dict[str, Any]] = list(result_blocks)
+        if steps_left <= 2:  # budget hint AFTER the tool_result blocks
+            user_turn.append(
+                {
+                    "type": "text",
+                    "text": f"You have {steps_left - 1} tool call(s) left. Wrap up and "
+                    "answer now, citing the symbol ids that form the path.",
+                }
+            )
+        messages.append({"role": "user", "content": user_turn})
+
+    # Step cap hit — force a final synthesis with the stronger model, no tools.
+    messages.append(
+        {
+            "role": "user",
+            "content": "You are out of tool calls. Using everything you have found, "
+            "answer the question now in plain English, citing the relevant symbol ids.",
+        }
+    )
+    final = llm.create_message(
+        system=SYSTEM_PROMPT,
+        messages=messages,
+        tools=[],
+        model=llm.SYNTH_MODEL,
+        max_tokens=4096,  # room for code suggestions
+    )
+    return _finish(final.text(), seen_ids, steps=MAX_STEPS)
+
+
+def _finish(answer: str, seen_ids: set[str], steps: int | None = None) -> dict[str, Any]:
+    # The lit path = symbols seen during navigation that the answer actually cites.
+    cited = sorted(sid for sid in seen_ids if sid in answer)
+    return {"answer": answer, "cited_ids": cited, "steps": steps}

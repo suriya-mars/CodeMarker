@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+neo4j
+# tree-sitter-languages ships prebuilt grammars but only links against the
+# tree-sitter 0.21.x C API; tree-sitter >=0.22 breaks its loader. Pin both.
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2
+anthropic
+openai
+python-igraph
+leidenalg
+pytest
+ruff

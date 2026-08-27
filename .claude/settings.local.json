@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p repos api/tests/fixtures web/src && echo \"created dirs\")",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
+    ],
+    "additionalDirectories": [
+      "/home/suriya/suriya/CodeMarker"
+    ]
+  }
+}
