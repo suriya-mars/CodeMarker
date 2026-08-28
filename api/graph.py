@@ -72,6 +72,19 @@ def setup_schema() -> None:
         _run(stmt)
 
 
+def get_profile() -> dict[str, Any]:
+    """The scale profile written at index time, or {} before a first index.
+
+    Query-time code adapts to the indexed repo's measured size rather than
+    assuming one. Never raises — callers fall back to their own defaults.
+    """
+    try:
+        rows = _run("MATCH (m:RepoMeta {id: 'current'}) RETURN m {.*} AS p")
+        return rows[0]["p"] if rows else {}
+    except Exception:  # noqa: BLE001 — a missing profile must never break a query
+        return {}
+
+
 def clear_graph() -> None:
     """Wipe all nodes/edges. Used before a full (non-incremental) re-index."""
     _run("MATCH (n) DETACH DELETE n")

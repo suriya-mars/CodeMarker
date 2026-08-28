@@ -56,21 +56,31 @@ def index(req: IndexRequest) -> dict[str, Any]:
 def ask(req: AskRequest) -> dict[str, Any]:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question is required")
-    return agent.ask(req.question)
+    # Step budget scales with the indexed repo (scale.py); missing profile is fine.
+    prof = graph.get_profile()
+    return agent.ask(req.question, max_steps=prof.get("max_agent_steps"))
 
 
 @app.get("/graph")
-def get_graph(limit: int = 1500) -> dict[str, list[dict[str, Any]]]:
+def get_graph(limit: int | None = None) -> dict[str, list[dict[str, Any]]]:
     """Return the Symbol graph for visualization: nodes + edges in a Cytoscape-
     friendly shape. CALLS/IMPORTS/INHERITS edges only (CONTAINS is implied by the
-    id hierarchy and would clutter the overview)."""
+    id hierarchy and would clutter the overview).
+
+    The node cap comes from the repo's scale profile — you cannot draw 150,000
+    nodes, so a large repo returns the highest-degree subgraph and the UI is
+    expected to drill in by community from there."""
+    prof = graph.get_profile()
+    if limit is None:
+        limit = prof.get("graph_render_limit", 1500)
     nodes = graph._run(
         """
         MATCH (s:Symbol)
         OPTIONAL MATCH (s)-[c:CALLS]-()
+        WITH s, count(c) AS degree
         RETURN s.id AS id, s.name AS name, s.kind AS kind, s.path AS path,
-               s.summary AS summary, s.community_id AS community_id,
-               count(c) AS degree
+               s.summary AS summary, s.community_id AS community_id, degree
+        ORDER BY degree DESC
         LIMIT $limit
         """,
         limit=int(limit),

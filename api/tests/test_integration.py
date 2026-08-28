@@ -129,3 +129,46 @@ def test_migration_blockers_scoped_to_a_symbol(indexed_graph):
 def test_unknown_symbol_is_handled(indexed_graph):
     assert "error" in tools.get_definition("does.not.exist")
     assert tools.get_callers("does.not.exist") == []
+
+
+# --- get_page_brief: the page-by-page migration entry point ------------------
+
+
+def test_page_brief_assembles_the_full_migration_picture(indexed_graph):
+    b = tools.get_page_brief("Web/Orders/OrderList.aspx")
+    assert b["page"] == "Web/Orders/OrderList.aspx"
+    assert b["is_webforms"] is True
+    # handlers are METHODS only — the code-behind class is not a handler
+    names = {h["name"] for h in b["handlers"]}
+    assert names == {"Page_Load", "btnSave_Click", "grid_RowDataBound"}
+    assert all(h["id"].count(".") >= 3 for h in b["handlers"])
+
+
+def test_page_brief_finds_procs_through_interface_indirection(indexed_graph):
+    """`_svc.Save()` resolves to IOrderService.Save, which has no body. The real
+    implementation and its stored procedure are only reachable backwards through
+    INHERITS — without that hop a DI codebase hides all its data access."""
+    b = tools.get_page_brief("Web/Orders/OrderList.aspx")
+    assert b["stored_procedures"] == ["usp_SaveOrder"]
+    via = [r for r in b["reachable_code"] if r.get("via")]
+    assert any(r["id"] == "Acme.Services.OrderService.Save" for r in via)
+
+
+def test_page_brief_counts_each_blocker_once(indexed_graph):
+    """Handlers appear in both the entry and reachable sets; counting naively
+    double-counts every blocker and inflates the effort estimate."""
+    b = tools.get_page_brief("Web/Orders/OrderList.aspx")
+    assert b["migration_blockers"] == {
+        "IsPostBack": 1, "Request": 1, "Session": 1, "ViewState": 1
+    }
+
+
+def test_page_brief_accepts_the_codebehind_class_id(indexed_graph):
+    assert tools.get_page_brief("Acme.Web.Orders.OrderList")["page"] == (
+        "Web/Orders/OrderList.aspx"
+    )
+
+
+def test_page_brief_reports_effort_and_handles_unknown_ids(indexed_graph):
+    assert isinstance(tools.get_page_brief("Web/Orders/OrderList.aspx")["effort_hint"], str)
+    assert "error" in tools.get_page_brief("no.such.page")

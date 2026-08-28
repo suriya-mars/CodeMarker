@@ -19,8 +19,17 @@ cp .env.example .env        # add your ANTHROPIC_API_KEY (or set LLM_PROVIDER=op
 # 1. Start the graph DB
 docker compose up -d neo4j
 
-# 2. Drop a Python repo into ./repos and index it
+# 2. Drop a repo into ./repos and index it
 docker compose run --rm api python -m indexer /repos/<repo-name>
+
+#    Indexing is STAGED and RESUMABLE — on a large codebase this is a multi-hour
+#    job, so a crash resumes instead of restarting. Nothing is destroyed unless
+#    you pass --fresh.
+#      --stage parse|summarize|community   run one stage (repeatable)
+#      --workers N                         summariser concurrency
+#      --fresh                             WIPE first (destructive, opt-in)
+#
+#    Interrupted? Just run it again — completed work is skipped.
 
 # 3. Bring up the app
 docker compose up -d

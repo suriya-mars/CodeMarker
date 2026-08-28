@@ -14,8 +14,15 @@ from parsing import Symbol
 _MAX_SOURCE_CHARS = 2000
 
 
-def summarize_symbol(symbol: Symbol) -> str:
-    """One natural-language line describing what a Symbol does."""
+def summarize_symbol(symbol: Symbol) -> str | None:
+    """One natural-language line describing what a Symbol does.
+
+    Returns None on failure rather than falling back to the symbol name. The
+    fallback looked harmless but silently poisoned the search index: a
+    rate-limited symbol would get `summary = name` forever, and — because the
+    resume query looks for symbols WITHOUT a summary — it would never be retried.
+    None leaves it pending so the next pass picks it up.
+    """
     if symbol.kind == "file":
         prompt = (
             f"This is a {symbol.language} file named `{symbol.name}`.\n"
@@ -33,9 +40,9 @@ def summarize_symbol(symbol: Symbol) -> str:
         )
     try:
         return llm.complete(prompt, model=llm.SUMMARY_MODEL, max_tokens=120)
-    except Exception as exc:  # noqa: BLE001 — degrade gracefully, keep indexing
-        print(f"[summarize] {symbol.id}: {exc}")
-        return symbol.name
+    except Exception as exc:  # noqa: BLE001 — one failure must not stop the run
+        print(f"[summarize] FAILED {symbol.id}: {exc}")
+        return None
 
 
 def summarize_community(name: str, member_summaries: list[str]) -> str:

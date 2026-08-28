@@ -21,6 +21,10 @@ from typing import Any
 import llm
 import tools
 
+# Default step budget. The API layer overrides this per-repo from the measured
+# scale profile (scale.py) — a 2M-LOC monolith needs longer paths than a
+# 20k-LOC service. agent.py deliberately does NOT import graph: the budget is
+# passed in, so the loop stays pure and unit-testable without a database.
 MAX_STEPS = 8
 
 SYSTEM_PROMPT = """\
@@ -83,14 +87,19 @@ def _collect_ids(payload: Any, into: set[str]) -> None:
             _collect_ids(v, into)
 
 
-def ask(question: str) -> dict[str, Any]:
-    """Run the navigation loop and return {answer, cited_ids, steps}."""
+def ask(question: str, max_steps: int | None = None) -> dict[str, Any]:
+    """Run the navigation loop and return {answer, cited_ids, steps}.
+
+    `max_steps` comes from the indexed repo's scale profile when the caller has
+    one; it falls back to MAX_STEPS so the loop works standalone.
+    """
+    budget = max(2, min(int(max_steps or MAX_STEPS), 24))
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     seen_ids: set[str] = set()
     visited: set[str] = set()
 
-    for step in range(MAX_STEPS):
-        steps_left = MAX_STEPS - step
+    for step in range(budget):
+        steps_left = budget - step
         resp = llm.create_message(
             system=SYSTEM_PROMPT,
             messages=messages,
@@ -148,7 +157,7 @@ def ask(question: str) -> dict[str, Any]:
         model=llm.SYNTH_MODEL,
         max_tokens=4096,  # room for code suggestions
     )
-    return _finish(final.text(), seen_ids, steps=MAX_STEPS)
+    return _finish(final.text(), seen_ids, steps=budget)
 
 
 def _finish(answer: str, seen_ids: set[str], steps: int | None = None) -> dict[str, Any]:
