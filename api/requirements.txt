@@ -11,3 +11,4 @@ python-igraph
 leidenalg
 pytest
 ruff
+mcp

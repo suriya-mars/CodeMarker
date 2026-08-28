@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import agent
 import graph
 import indexer
+import telemetry
 
 app = FastAPI(title="Codebase Explorer")
 
@@ -37,6 +38,13 @@ class AskRequest(BaseModel):
 @app.on_event("shutdown")
 def _shutdown() -> None:
     graph.close_driver()
+
+
+@app.get("/usage")
+def usage() -> dict[str, Any]:
+    """Token, cost, and latency totals for this process — the answer to
+    'what is this costing us?'. Counts only; no prompts are ever recorded."""
+    return telemetry.snapshot()
 
 
 @app.get("/health")

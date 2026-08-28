@@ -23,6 +23,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+import telemetry
+
 NAV_MODEL = "claude-sonnet-4-6"
 SYNTH_MODEL = "claude-opus-4-8"
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
@@ -86,6 +88,25 @@ def _openai_model() -> str:
     return model
 
 
+def _report(tracker, resp) -> None:
+    """Feed a provider response's usage into telemetry.
+
+    Only COUNTS are recorded — never prompts or completions. Prompts here carry
+    customer source, and CLAUDE.md §2.3 permits no third-party egress of it.
+    """
+    try:
+        u = getattr(resp, "usage", None)
+        if u is None:
+            return
+        tracker.usage(
+            getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0) or 0,
+            getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0) or 0,
+            getattr(u, "cache_read_input_tokens", 0) or 0,
+        )
+    except Exception:  # noqa: BLE001 — accounting must never break a call
+        pass
+
+
 # --- Public surface ---------------------------------------------------------
 
 
@@ -96,11 +117,13 @@ def complete(prompt: str, *, model: str, max_tokens: int = 256, system: str | No
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        resp = _openai().chat.completions.create(
-            model=_openai_model(),
-            max_tokens=max_tokens,
-            messages=messages,
-        )
+        with telemetry.track(_openai_model(), "complete") as t:
+            resp = _openai().chat.completions.create(
+                model=_openai_model(),
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+            _report(t, resp)
         return (resp.choices[0].message.content or "").strip()
 
     kwargs: dict[str, Any] = {
@@ -110,7 +133,9 @@ def complete(prompt: str, *, model: str, max_tokens: int = 256, system: str | No
     }
     if system:
         kwargs["system"] = system
-    resp = _anthropic().messages.create(**kwargs)
+    with telemetry.track(model, "complete") as t:
+        resp = _anthropic().messages.create(**kwargs)
+        _report(t, resp)
     return "".join(b.text for b in resp.content if b.type == "text").strip()
 
 
@@ -145,7 +170,9 @@ def _create_message_anthropic(
     }
     if tools:  # omit when empty so the model is forced to answer in text
         kwargs["tools"] = tools
-    resp = _anthropic().messages.create(**kwargs)
+    with telemetry.track(model, "navigate" if tools else "synthesize") as t:
+        resp = _anthropic().messages.create(**kwargs)
+        _report(t, resp)
     content: list[dict[str, Any]] = []
     for block in resp.content:
         if block.type == "text":
@@ -193,7 +220,9 @@ def _create_message_openai(
             for t in tools
         ]
 
-    resp = _openai().chat.completions.create(**oai_kwargs)
+    with telemetry.track(_openai_model(), "navigate" if tools else "synthesize") as t:
+        resp = _openai().chat.completions.create(**oai_kwargs)
+        _report(t, resp)
     choice = resp.choices[0]
     content: list[dict[str, Any]] = []
     if choice.message.content:

@@ -151,14 +151,33 @@ def _build_index(symbols: list[Symbol], by_id: dict[str, Symbol]) -> GlobalIndex
     )
 
 
-def parse_repo(repo_root: str) -> tuple[list[Symbol], list[Edge]]:
+def parse_repo(
+    repo_root: str, stats: dict | None = None
+) -> tuple[list[Symbol], list[Edge]]:
+    """Parse a repo into Symbols + edges.
+
+    Pass a dict as `stats` to collect resolution diagnostics — chiefly how many
+    call sites resolved versus were dropped. That ratio is the gate on whether
+    the graph is trustworthy enough to guide refactoring: unresolved calls are
+    dropped rather than guessed (CLAUDE.md §2.2), so a low rate means blast
+    radius is quietly incomplete rather than wrong.
+    """
+    counters = stats if stats is not None else {}
+    counters.setdefault("files_parsed", 0)
+    counters.setdefault("files_failed", 0)
+    counters.setdefault("calls_seen", 0)
+    counters.setdefault("calls_resolved", 0)
+    counters.setdefault("unresolved_names", Counter())
+
     parsed: list[ParsedFile] = []
     for path in iter_source_files(repo_root):
         try:
             pf = parse_file(path, repo_root)
             if pf is not None:
                 parsed.append(pf)
+                counters["files_parsed"] += 1
         except Exception as exc:  # noqa: BLE001 — one bad file must not kill indexing
+            counters["files_failed"] += 1
             print(f"[parse] skipped {path}: {exc}")
 
     symbols, by_id = _collect_symbols(parsed)
@@ -196,9 +215,13 @@ def parse_repo(repo_root: str) -> tuple[list[Symbol], list[Edge]]:
                 continue
             counts: Counter[str] = Counter()
             for callee, is_self, receiver in sites:
+                counters["calls_seen"] += 1
                 target = resolve(caller_id, callee, is_self, receiver, pf, index)
                 if target and target != caller_id and target in by_id:
+                    counters["calls_resolved"] += 1
                     counts[target] += 1
+                else:
+                    counters["unresolved_names"][callee] += 1
             for target, n in counts.items():
                 edges.append(Edge(caller_id, target, "CALLS", count=n))
 
