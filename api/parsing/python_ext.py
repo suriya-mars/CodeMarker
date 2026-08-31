@@ -55,7 +55,10 @@ def parse_file(file_path: str, repo_root: str) -> ParsedFile:
     )
     pf = ParsedFile(symbols=[file_sym], language=LANGUAGE)
 
-    _extract_imports(root, src, pf)
+    _extract_imports(
+        root, src, module, pf,
+        is_package=os.path.basename(file_path) == "__init__.py",
+    )
 
     for child in root.named_children:
         target = child
@@ -73,7 +76,31 @@ def parse_file(file_path: str, repo_root: str) -> ParsedFile:
     return pf
 
 
-def _extract_imports(root, src: bytes, pf: ParsedFile) -> None:
+def resolve_relative(base: str, module: str, is_package: bool = False) -> str:
+    """`.noise_schedule` inside `pkg.sub.mod` -> `pkg.sub.noise_schedule`.
+
+    Relative imports are ubiquitous in real packages, and without this every one
+    of them silently produced a dotted name (`.noise_schedule.cosine_schedule`)
+    that could never match a Symbol id — dropping both the IMPORTS edge and every
+    CALLS edge through it. Measured on a real repo, this accounted for the
+    largest single group of unresolved calls.
+    """
+    dots = len(base) - len(base.lstrip("."))
+    if not dots:
+        return base
+    rest = base[dots:]
+    # A package's __init__.py has the PACKAGE as its module id, so its own
+    # package is itself — stripping the last component would walk up one level
+    # too far and turn `.noise_schedule` into `noise_schedule` instead of
+    # `pkg.noise_schedule`.
+    parts = module.split(".") if is_package else module.split(".")[:-1]
+    if dots > 1:  # each extra dot walks one package up
+        parts = parts[: max(0, len(parts) - (dots - 1))]
+    return ".".join([p for p in (*parts, rest) if p])
+
+
+def _extract_imports(root, src: bytes, module: str, pf: ParsedFile,
+                     is_package: bool = False) -> None:
     for node in root.named_children:
         if node.type == "import_statement":
             for name_node in node.named_children:
@@ -81,6 +108,8 @@ def _extract_imports(root, src: bytes, pf: ParsedFile) -> None:
         elif node.type == "import_from_statement":
             mod_node = node.child_by_field_name("module_name")
             base = node_text(mod_node, src) if mod_node else ""
+            if base.startswith("."):
+                base = resolve_relative(base, module, is_package)
             if base:
                 pf.imported_modules.append(base)
             for child in node.named_children:
@@ -247,4 +276,7 @@ def resolve_call(
     target = pf.import_map.get(callee_name)
     if target and target in index.qualified:
         return index.qualified[target]
+    # the name may be re-exported by a package __init__
+    if target and target in index.reexports:
+        return index.reexports[target]
     return None

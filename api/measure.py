@@ -14,11 +14,19 @@ produces MISSING ones, which means `get_blast_radius` quietly under-reports and
 `get_page_brief` misses dependencies. Below ~60% the graph is not trustworthy
 enough to guide refactoring, and Roslyn moves from "later" to "now".
 
-    python -m measure /repos/YourModule
+Run it from the project root (no cd needed):
+
+    venv/bin/python api/measure.py /path/to/YourModule
+
+or inside the container (paths must be under /repos, which is mounted from
+./repos — the container cannot see host paths):
+
+    docker compose run --rm --no-deps api python -m measure /repos/YourModule
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections import Counter
@@ -33,8 +41,37 @@ def _bar(pct: float, width: int = 32) -> str:
     return "#" * filled + "." * (width - filled)
 
 
+def _explain_bad_path(path: str) -> str:
+    """Docker is the common trap: host paths are invisible inside the container."""
+    lines = [f"  path not found inside this process: {path}"]
+    if os.path.isdir("/repos"):
+        visible = sorted(os.listdir("/repos"))[:10]
+        lines += [
+            "",
+            "  You are running inside the container, which cannot see host paths.",
+            "  It can only see /repos (mounted from ./repos) and /app.",
+            "",
+            "  Fix:",
+            "      cp -r <your-module> ./repos/",
+            "      docker compose run --rm --no-deps api python -m measure /repos/<your-module>",
+            "",
+            f"  Currently in /repos: {visible or '(empty)'}",
+        ]
+    return "\n".join(lines)
+
+
 def measure(path: str) -> dict:
+    if not os.path.isdir(path):
+        print("\n" + _explain_bad_path(path) + "\n")
+        raise SystemExit(2)
+
     files = list(parsing.iter_source_files(path))
+    if not files:
+        exts = sorted({e for m in parsing._EXTRACTORS for e in m.EXTENSIONS})
+        print(f"\n  {path} exists but contains no parseable files.")
+        print(f"  Supported extensions: {', '.join(exts)}")
+        print("  (bin/obj/node_modules/.git and generated *.g.cs are skipped)\n")
+        raise SystemExit(2)
     loc = 0
     for f in files:
         try:

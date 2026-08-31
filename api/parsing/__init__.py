@@ -60,7 +60,17 @@ _SKIP_FILE_SUFFIXES = (".g.cs", ".g.i.cs", ".AssemblyInfo.cs", ".Designer.vb")
 
 
 def iter_source_files(repo_root: str):
-    """Yield every file any registered extractor can handle."""
+    """Yield every file any registered extractor can handle.
+
+    Raises if the path does not exist. `os.walk` on a missing directory yields
+    NOTHING rather than failing, which silently turns a typo (or a host path
+    passed into a container) into "0 symbols found" — a wrong answer that looks
+    like a real one.
+    """
+    if not os.path.isdir(repo_root):
+        raise NotADirectoryError(
+            f"{repo_root!r} is not a directory that this process can see"
+        )
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         for fn in filenames:
@@ -131,6 +141,30 @@ def _merge_partial(keep: Symbol, other: Symbol) -> None:
     keep.sql_procs = sorted(set(keep.sql_procs) | set(other.sql_procs))
 
 
+def _build_reexports(parsed: list[ParsedFile], by_id: dict[str, Symbol]) -> dict[str, str]:
+    """Map `pkg.name` -> the id where `name` is really defined.
+
+    A package's `__init__.py` commonly re-exports:
+
+        # pkg/__init__.py
+        from .noise_schedule import cosine_schedule
+
+    which makes `from pkg import cosine_schedule` legal. But the Symbol id is
+    `pkg.noise_schedule.cosine_schedule`, so `pkg.cosine_schedule` matches
+    nothing and every call through it is dropped. Measured on a real repo this
+    was the second-largest group of unresolved calls.
+    """
+    out: dict[str, str] = {}
+    for pf in parsed:
+        head = pf.symbols[0]
+        if not head.path.endswith("__init__.py"):
+            continue
+        for local_name, target in pf.import_map.items():
+            if target in by_id:
+                out[f"{head.id}.{local_name}"] = target
+    return out
+
+
 def _build_index(symbols: list[Symbol], by_id: dict[str, Symbol]) -> GlobalIndex:
     classes_by_name: dict[str, str] = {}
     methods_by_name: dict[str, list[str]] = defaultdict(list)
@@ -182,6 +216,7 @@ def parse_repo(
 
     symbols, by_id = _collect_symbols(parsed)
     index = _build_index(symbols, by_id)
+    index.reexports = _build_reexports(parsed, by_id)
     edges: list[Edge] = []
 
     # CONTAINS — recorded explicitly by each extractor where nesting is known

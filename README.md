@@ -61,6 +61,27 @@ Add one by dropping a `parsing/<lang>_ext.py` in and registering it — see
 CLAUDE.md §10. For the .NET WebForms → .NET Core migration build, see
 [PRODUCTION-DOTNET.md](PRODUCTION-DOTNET.md).
 
+## Measure before you index
+
+Point `measure` at ONE real module first. It costs nothing — no LLM calls, no
+database — and reports what the extractor actually got, chiefly the **call
+resolution rate**: the fraction of call sites that became `CALLS` edges.
+Unresolved calls are dropped rather than guessed, so a low rate means blast
+radius silently under-reports.
+
+```bash
+# from the project root — works with any host path
+venv/bin/python api/measure.py /path/to/YourModule
+
+# or in the container (paths must live under ./repos, mounted at /repos)
+cp -r /path/to/YourModule ./repos/
+docker compose run --rm --no-deps api python -m measure /repos/YourModule
+```
+
+`python -m measure` only works when `measure.py` is in the current directory
+(i.e. from `api/`, or inside the container where it is `/app`). Running it by
+file path works from anywhere.
+
 ## Development
 
 ```bash

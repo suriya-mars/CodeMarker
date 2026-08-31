@@ -81,6 +81,8 @@ class GlobalIndex:
     file_ids: set[str]
     classes_by_name: dict[str, str]
     methods_by_name: dict[str, list[str]]
+    # `pkg.name` -> real id, for names a package __init__ re-exports
+    reexports: dict[str, str] = field(default_factory=dict)
 
 
 # --- tree-sitter helpers shared by extractors -------------------------------
