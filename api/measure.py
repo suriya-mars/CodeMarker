@@ -29,11 +29,18 @@ from __future__ import annotations
 import os
 import sys
 import time
+import re
 from collections import Counter
 
 import parsing
 import scale
 import telemetry
+from parsing import aspx_ext
+
+# `btnSave_Click`, `grid_RowDataBound` — underscore then a CAPITAL.
+# Deliberately does NOT match `_init_weights` or `__init__`, which is what made
+# a Python repo report 37 "orphaned event handlers".
+_HANDLER_NAME = re.compile(r"^\w+_[A-Z]\w*$")
 
 
 def _bar(pct: float, width: int = 32) -> str:
@@ -107,7 +114,10 @@ def measure(path: str) -> dict:
     # in your repo. Counting framework calls as failures makes the number
     # meaningless. What matters is: of calls whose name matches something we DID
     # index, how many resolved? Those are the real misses.
-    own_names = {s.name for s in symbols}
+    # Dunders and constructor-ish names collide with framework code constantly
+    # (`__init__`, `from_pretrained`), so counting them as internal misses
+    # understates the rate. Excluded from the denominator, not hidden.
+    own_names = {s.name for s in symbols if not s.name.startswith("__")}
     internal_missed = sum(n for name, n in stats["unresolved_names"].items()
                           if name in own_names)
     external_missed = (seen - resolved) - internal_missed
@@ -127,35 +137,62 @@ def measure(path: str) -> dict:
                 print(f"      {n:>6}x  {name}")
 
     pages = [s for s in symbols if s.kind == "page"]
-    handled = {e.dst for e in edges if e.type == "HANDLES"}
-    handler_like = [
-        s for s in symbols
-        if s.kind == "method" and (s.name.startswith("Page_") or "_" in s.name)
-    ]
-    orphans = [s for s in handler_like if s.id not in handled]
-    if pages or handler_like:
+    if pages:
+        handled = {e.dst for e in edges if e.type == "HANDLES"}
+        # A WebForms handler is `Control_Event` (underscore then a CAPITAL) or a
+        # lifecycle name, on a type that derives from Page/UserControl. Matching
+        # "any name with an underscore" reports Python's __init__ and _helper as
+        # orphaned event handlers, which is pure noise.
+        handler_like = [
+            sym for sym in symbols
+            if sym.kind == "method" and sym.language == "csharp" and sym.is_webforms
+            and (sym.name in aspx_ext.LIFECYCLE or _HANDLER_NAME.match(sym.name))
+        ]
+        orphans = [sym for sym in handler_like if sym.id not in handled]
         print("\n  === WEBFORMS " + "=" * 53)
         print(f"  {len(pages):,} pages, {len(handled):,} handlers wired via HANDLES")
-        print(f"  {len(orphans):,} handler-shaped methods with NO page wiring")
+        print(f"  {len(orphans):,} of {len(handler_like):,} handler-shaped methods "
+              f"have NO page wiring")
         if orphans[:5]:
-            print("      e.g. " + ", ".join(s.name for s in orphans[:5]))
+            print("      e.g. " + ", ".join(sym.name for sym in orphans[:5]))
+            print("      (markup may not resolve to the code-behind — check "
+                  "Inherits= in the @Page directive)")
 
     legacy = Counter()
+    libs = Counter()
     for s in symbols:
         legacy.update(s.legacy_apis)
+        libs.update(s.legacy_libs)
     procs = {p for s in symbols for p in s.sql_procs}
-    if legacy or procs:
+    endpoints = {e for s in symbols for e in s.ajax_endpoints}
+    if legacy or procs or libs or endpoints:
         print("\n  === MIGRATION SIGNAL " + "=" * 45)
         print(f"  legacy API uses : {dict(legacy.most_common(8))}")
         print(f"  stored procs referenced: {len(procs)}"
               + (f"  e.g. {sorted(procs)[:4]}" if procs else ""))
+        if libs:
+            print(f"  front-end libs  : {dict(libs.most_common(8))}")
+        if endpoints:
+            print(f"  ajax endpoints  : {len(endpoints)}  e.g. {sorted(endpoints)[:3]}")
 
+    front = Counter(s.language for s in symbols if s.language in ("javascript", "css", "aspx"))
+    triggers = sum(1 for e in edges if e.type == "TRIGGERS")
+    if front:
+        print("\n  === CLIENT SIDE " + "=" * 50)
+        print(f"  symbols: {dict(front)}")
+        print(f"  TRIGGERS edges (JS -> server handler): {triggers}")
+        if not triggers and front.get("javascript"):
+            print("      none found — if this app uses __doPostBack, check that")
+            print("      script src paths resolve to indexed .js files")
+
+    model = telemetry.active_model()
     print("\n  === PROJECTION TO YOUR FULL CODEBASE " + "=" * 29)
+    print(f"  summariser model: {model}")
     per_loc = len(symbols) / loc if loc else 0
     for target in (500_000, 2_000_000):
         n = int(target * per_loc)
         prof = scale.derive(n, n * 3)
-        cost = n * telemetry.cost_of("claude-haiku-4-5", 600, 40)
+        cost = n * telemetry.cost_of(model, 600, 40)
         serial_h = n * 0.6 / 3600
         print(f"  {target:>9,} LOC -> ~{n:>7,} symbols | tier {prof.tier:<6} "
               f"| ~${cost:>6.0f} | {serial_h:>5.1f}h serial, "

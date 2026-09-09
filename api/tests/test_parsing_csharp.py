@@ -138,5 +138,6 @@ def test_python_and_csharp_coexist():
     )
     cs_syms, _ = _parse()
     assert {s.language for s in py_syms} == {"python"}
-    assert {s.language for s in cs_syms} == {"csharp", "aspx"}
-    assert "python" in parsing.LANGUAGES and "csharp" in parsing.LANGUAGES
+    # the WebForms fixture is deliberately multi-language: C#, markup, JS and CSS
+    assert {"csharp", "aspx"} <= {s.language for s in cs_syms}
+    assert {"python", "csharp", "javascript", "css"} <= set(parsing.LANGUAGES)

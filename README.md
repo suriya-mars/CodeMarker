@@ -13,6 +13,10 @@ for the full design.
 
 ## Quick start
 
+**Operational commands live in [RUNBOOK.md](RUNBOOK.md)** — setup, measuring,
+indexing, re-indexing on merge, the MCP server, and a troubleshooting section
+covering every error hit in practice.
+
 ```bash
 cp .env.example .env        # add your ANTHROPIC_API_KEY (or set LLM_PROVIDER=openai)
 

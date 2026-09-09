@@ -34,6 +34,9 @@ class Symbol:
     is_webforms: bool = False
     legacy_apis: list[str] = field(default_factory=list)
     sql_procs: list[str] = field(default_factory=list)
+    ajax_endpoints: list[str] = field(default_factory=list)
+    selectors: list[str] = field(default_factory=list)
+    legacy_libs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -70,6 +73,10 @@ class ParsedFile:
     raw_handlers: dict[str, list[str]] = field(default_factory=dict)
     # page_id -> code-behind class name from the @Page directive
     codebehind: dict[str, str] = field(default_factory=dict)
+    # js symbol id -> control ids it posts back to (WebForms client/server bridge)
+    postback_targets: dict[str, list[str]] = field(default_factory=dict)
+    # page_id -> {control id -> handler method name}, from On*= attributes
+    control_handlers: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 @dataclass

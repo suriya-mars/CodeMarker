@@ -13,7 +13,9 @@ CLI:  python -m indexer /repos/<repo-name>
 
 from __future__ import annotations
 
+import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from typing import Any
@@ -26,7 +28,8 @@ from parsing import Edge, Symbol, parse_repo
 
 # Relationship types we are allowed to write. Cypher rel-types can't be
 # parameterized, so we dispatch per (validated) type — never interpolate raw input.
-_EDGE_TYPES = {"CONTAINS", "IMPORTS", "CALLS", "INHERITS", "HANDLES", "EXECUTES"}
+_EDGE_TYPES = {"CONTAINS", "IMPORTS", "CALLS", "INHERITS", "HANDLES",
+               "EXECUTES", "TRIGGERS"}
 _BATCH = 500
 
 
@@ -35,17 +38,63 @@ def _batches(items, size=_BATCH):
         yield items[i : i + size]
 
 
-def write_symbols(symbols: list[Symbol]) -> None:
-    rows = [asdict(s) for s in symbols]
-    for batch in _batches(rows): # one BATCH --> 500 rows[dict : symbols] to reduce overhead of Node creation
+def write_symbols(symbols: list[Symbol], *, repo: str = "", run_id: str = "") -> None:
+    """Write symbols, preserving summaries for code that did not change.
+
+    Two things here are load-bearing for re-indexing after a teammate pushes:
+
+    * `summary` is REMOVED from the row. The parse-time dataclass carries
+      `summary=""`, and `SET s += row` would clobber the real summary with it —
+      making every re-index re-summarise the whole repo at full cost.
+    * The summary is cleared ONLY when `source` actually changed, so edited code
+      is re-summarised and untouched code is not.
+
+    `repo` and `run_id` tag each node so `delete_stale()` can remove symbols for
+    code that no longer exists without touching other repos in the same graph.
+    """
+    rows = []
+    for sym in symbols:
+        row = asdict(sym)
+        row.pop("summary", None)  # owned by write_summaries, never by parsing
+        row["repo"] = repo
+        row["last_seen"] = run_id
+        rows.append(row)
+
+    for batch in _batches(rows):  # 500 rows per round trip
         graph._run(
             """
             UNWIND $rows AS row
             MERGE (s:Symbol {id: row.id})
+            WITH s, row, (s.source IS NOT NULL AND s.source <> row.source) AS changed
             SET s += row
+            SET s.summary = CASE WHEN changed THEN null ELSE s.summary END
             """,
             rows=batch,
         )
+
+
+def delete_stale(repo: str, run_id: str) -> int:
+    """Remove symbols of this repo that the latest parse did not see.
+
+    MERGE only adds and updates, so without this a deleted method lingers in the
+    graph forever and blast radius reports dependencies on code that is gone.
+    Scoped by `repo` so indexing one codebase never disturbs another sharing the
+    same database.
+    """
+    if not repo or not run_id:
+        return 0
+    rows = graph._run(
+        """
+        MATCH (s:Symbol {repo: $repo})
+        WHERE s.last_seen IS NULL OR s.last_seen <> $run_id
+        WITH s, count(*) AS _
+        DETACH DELETE s
+        RETURN count(*) AS removed
+        """,
+        repo=repo,
+        run_id=run_id,
+    )
+    return rows[0]["removed"] if rows else 0
 
 
 def write_edges(edges: list[Edge]) -> None:
@@ -265,6 +314,7 @@ STAGES = ("parse", "summarize", "community")
 def index_repo(
     repo_path: str,
     *,
+    repo: str = "",
     fresh: bool = False,
     stages: tuple[str, ...] = STAGES,
     workers: int | None = None,
@@ -288,14 +338,19 @@ def index_repo(
         graph.clear_graph()
 
     if "parse" in stages:
-        print(f"[index] parsing {repo_path}")
+        repo_name = repo or os.path.basename(os.path.normpath(repo_path))
+        run_id = uuid.uuid4().hex
+        print(f"[index] parsing {repo_path}  (repo={repo_name})")
         t0 = time.time()
         symbols, edges = parse_repo(repo_path)
         print(f"[index] {len(symbols):,} symbols, {len(edges):,} edges "
               f"in {time.time()-t0:.0f}s")
-        write_symbols(symbols)
+        write_symbols(symbols, repo=repo_name, run_id=run_id)
         write_edges(edges)
-        result |= {"symbols": len(symbols), "edges": len(edges)}
+        removed = delete_stale(repo_name, run_id)
+        if removed:
+            print(f"[index] removed {removed:,} symbols for code that no longer exists")
+        result |= {"symbols": len(symbols), "edges": len(edges), "removed": removed}
         del symbols, edges  # release before the long LLM stage
 
     if "summarize" in stages:
@@ -336,12 +391,15 @@ def main() -> None:
                     help="WIPE the graph before indexing (destructive; off by default)")
     ap.add_argument("--stage", action="append", choices=STAGES, dest="stages",
                     help="run only this stage; repeatable. Default: all")
+    ap.add_argument("--repo", default="",
+                    help="repo name for scoping (default: the directory name)")
     ap.add_argument("--workers", type=int, default=None,
                     help="summariser concurrency (default: from the scale profile)")
     args = ap.parse_args()
 
     stats = index_repo(
         args.repo_path,
+        repo=args.repo,
         fresh=args.fresh,
         stages=tuple(args.stages) if args.stages else STAGES,
         workers=args.workers,

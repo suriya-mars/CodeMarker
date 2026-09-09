@@ -132,3 +132,88 @@ def test_indexing_is_not_destructive_by_default(monkeypatch):
 
     indexer.index_repo(FIXTURE, stages=("parse",), fresh=True)
     assert graph._run("MATCH (s:Symbol {id:'sentinel'}) RETURN count(s) AS n")[0]["n"] == 0
+
+
+# --- re-indexing after a teammate pushes ------------------------------------
+
+
+@pytest.fixture
+def workdir(tmp_path):
+    import shutil
+
+    dest = tmp_path / "app"
+    shutil.copytree(FIXTURE, dest)
+    return str(dest)
+
+
+def _counting_summarizer(counter):
+    def fake(sym):
+        counter.append(sym.id)
+        return f"summary of {sym.name}"
+
+    return fake
+
+
+def test_reindex_with_no_changes_costs_nothing(monkeypatch, workdir):
+    """The bug this pins: the parse-time dataclass carries summary="", and
+    `SET s += row` used to clobber real summaries with it — so every re-index
+    re-summarised the entire repo at full price."""
+    seen: list[str] = []
+    monkeypatch.setattr(summarize, "summarize_symbol", _counting_summarizer(seen))
+
+    indexer.index_repo(workdir, repo="t", stages=("parse", "summarize"))
+    first = len(seen)
+    assert first > 0
+
+    seen.clear()
+    indexer.index_repo(workdir, repo="t", stages=("parse", "summarize"))
+    assert seen == [], "unchanged code must not be re-summarised"
+
+
+def test_reindex_resummarizes_only_what_changed(monkeypatch, workdir):
+    seen: list[str] = []
+    monkeypatch.setattr(summarize, "summarize_symbol", _counting_summarizer(seen))
+    indexer.index_repo(workdir, repo="t", stages=("parse", "summarize"))
+
+    target = os.path.join(workdir, "Web", "Orders", "OrderList.aspx.cs")
+    with open(target) as fh:
+        body = fh.read()
+    with open(target, "w") as fh:
+        fh.write(body.replace('Audit("save");', 'Audit("save"); LogMetric();'))
+
+    seen.clear()
+    indexer.index_repo(workdir, repo="t", stages=("parse", "summarize"))
+    assert seen, "edited code must be re-summarised"
+    assert all("OrderList" in sid for sid in seen), seen
+    assert len(seen) < 6, "only the touched symbols, not the whole repo"
+
+
+def test_deleted_code_is_removed_from_the_graph(monkeypatch, workdir):
+    """MERGE only adds and updates. Without stale deletion a removed method
+    lingers forever and blast radius reports dependencies on code that is gone."""
+    monkeypatch.setattr(summarize, "summarize_symbol", lambda s: "x")
+    indexer.index_repo(workdir, repo="t", stages=("parse",))
+    assert graph._run(
+        "MATCH (s:Symbol) WHERE s.id STARTS WITH 'Acme.Services.OrderService' "
+        "RETURN count(s) AS n"
+    )[0]["n"] > 0
+
+    os.remove(os.path.join(workdir, "Services", "OrderService.cs"))
+    stats = indexer.index_repo(workdir, repo="t", stages=("parse",))
+
+    assert stats["removed"] > 0
+    assert graph._run(
+        "MATCH (s:Symbol) WHERE s.id STARTS WITH 'Acme.Services.OrderService' "
+        "RETURN count(s) AS n"
+    )[0]["n"] == 0
+
+
+def test_deletion_is_scoped_to_one_repo(monkeypatch, workdir):
+    """Indexing one codebase must never delete another sharing the database."""
+    monkeypatch.setattr(summarize, "summarize_symbol", lambda s: "x")
+    graph._run("MERGE (s:Symbol {id:'other.thing'}) SET s.repo='otherapp', s.summary='keep'")
+
+    indexer.index_repo(workdir, repo="t", stages=("parse",))
+    assert graph._run(
+        "MATCH (s:Symbol {id:'other.thing'}) RETURN count(s) AS n"
+    )[0]["n"] == 1

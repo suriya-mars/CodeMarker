@@ -23,16 +23,34 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-# USD per 1M tokens (input, output). Standard rates — intentionally not the
-# promotional ones, so estimates are conservative.
+# USD per 1M tokens (input, output). Standard rates — deliberately not the
+# promotional ones, so estimates stay conservative.
+#   Anthropic: docs.claude.com pricing
+#   OpenAI:    developers.openai.com/api/docs/pricing  (verified 2026-08-31)
+# Override or extend without editing code:
+#   TELEMETRY_PRICING='{"my-model": [0.5, 1.5]}'
 PRICING: dict[str, tuple[float, float]] = {
+    # Anthropic
     "claude-opus-5": (5.00, 25.00),
     "claude-opus-4-8": (5.00, 25.00),
     "claude-sonnet-5": (3.00, 15.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
+    # OpenAI
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
 }
 _DEFAULT_PRICE = (3.00, 15.00)
+
+try:  # user-supplied rates win, so an unlisted model still reports real cost
+    PRICING.update(
+        {k: (float(v[0]), float(v[1]))
+         for k, v in json.loads(os.environ.get("TELEMETRY_PRICING", "{}")).items()}
+    )
+except Exception:  # noqa: BLE001 — a bad override must not break startup
+    print("[telemetry] ignoring malformed TELEMETRY_PRICING", flush=True)
+
+_warned_unpriced: set[str] = set()
 
 _LOG = os.environ.get("TELEMETRY_LOG", "1") != "0"
 
@@ -55,8 +73,28 @@ _totals = Totals()
 
 
 def cost_of(model: str, input_tokens: int, output_tokens: int) -> float:
-    inp, out = PRICING.get(model, _DEFAULT_PRICE)
+    """Cost in USD. Warns ONCE per unknown model — a silently wrong cost figure
+    is worse than no figure, because it gets quoted in budget conversations."""
+    price = PRICING.get(model)
+    if price is None:
+        price = _DEFAULT_PRICE
+        if model and model not in _warned_unpriced:
+            _warned_unpriced.add(model)
+            print(
+                f"[telemetry] no published rate for {model!r}; using "
+                f"${_DEFAULT_PRICE[0]}/${_DEFAULT_PRICE[1]} per 1M as a PLACEHOLDER. "
+                f"Set TELEMETRY_PRICING to report real cost.",
+                flush=True,
+            )
+    inp, out = price
     return (input_tokens * inp + output_tokens * out) / 1_000_000
+
+
+def active_model() -> str:
+    """The model this deployment will actually bill against, for projections."""
+    if os.environ.get("LLM_PROVIDER", "anthropic").lower() == "openai":
+        return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    return "claude-haiku-4-5"
 
 
 def record(

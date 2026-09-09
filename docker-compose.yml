@@ -6,9 +6,15 @@ services:
       - "7687:7687"   # bolt
     environment:
       NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:-change-me}"
-      # Allow the larger heap full-text + Leiden writes need on bigger repos
-      NEO4J_server_memory_heap_initial__size: "512m"
-      NEO4J_server_memory_heap_max__size: "1G"
+      # Sized for bulk indexing of a large codebase. 1G was not enough: writing
+      # ~125k symbols with their source, plus building the full-text index,
+      # pushes the heap hard. Page cache keeps the hot graph resident so
+      # traversals (blast radius, HANDLES hops) stay fast.
+      # Tune down for small repos or a memory-constrained host.
+      # initial == max on purpose: Neo4j recommends it to avoid heap-resize pauses
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP:-4G}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP:-4G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-2G}"
     volumes:
       - neo4j-data:/data
     healthcheck:

@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from collections import Counter, defaultdict
 
-from . import aspx_ext, csharp_ext, python_ext
+from . import aspx_ext, csharp_ext, css_ext, js_ext, python_ext
 from .base import Edge, GlobalIndex, ParsedFile, Symbol, to_dict
 
 __all__ = [
@@ -33,7 +33,7 @@ __all__ = [
     "LANGUAGES",
 ]
 
-_EXTRACTORS = (python_ext, csharp_ext, aspx_ext)
+_EXTRACTORS = (python_ext, csharp_ext, aspx_ext, js_ext, css_ext)
 _BY_EXT = {ext: mod for mod in _EXTRACTORS for ext in mod.EXTENSIONS}
 LANGUAGES = tuple(mod.LANGUAGE for mod in _EXTRACTORS)
 
@@ -56,7 +56,19 @@ _SKIP_DIRS = {
     "TestResults",
 }
 # Generated code carries no migration signal but doubles the symbol count.
-_SKIP_FILE_SUFFIXES = (".g.cs", ".g.i.cs", ".AssemblyInfo.cs", ".Designer.vb")
+_SKIP_FILE_SUFFIXES = (".g.cs", ".g.i.cs", ".AssemblyInfo.cs", ".Designer.vb",
+                       ".min.js", ".min.css", "-min.js", ".bundle.js")
+# Vendored front-end libraries. Indexing jquery.js would add thousands of
+# meaningless symbols at real summarisation cost and bury your own code; the
+# only thing that matters about a library is its VERSION, which aspx_ext records
+# from the script tag.
+_VENDOR_NAMES = (
+    "jquery", "bootstrap", "modernizr", "knockout", "angular", "prototype",
+    "respond", "moment", "underscore", "lodash", "popper", "datatables",
+    "select2", "chosen", "kendo", "telerik", "devexpress",
+)
+_VENDOR_DIRS = {"lib", "libs", "vendor", "vendors", "third-party", "thirdparty",
+                "bower_components", "jspm_packages", "wwwroot/lib"}
 
 
 def iter_source_files(repo_root: str):
@@ -73,9 +85,15 @@ def iter_source_files(repo_root: str):
         )
     for dirpath, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        parts = {p.lower() for p in dirpath.replace(os.sep, "/").split("/")}
+        if parts & _VENDOR_DIRS:
+            continue
         for fn in filenames:
             if fn.endswith(_SKIP_FILE_SUFFIXES):
                 continue
+            low = fn.lower()
+            if low.endswith((".js", ".css")) and any(v in low for v in _VENDOR_NAMES):
+                continue  # vendored library — see _VENDOR_NAMES
             ext = os.path.splitext(fn)[1].lower()
             if ext in _BY_EXT:
                 yield os.path.join(dirpath, fn)
@@ -268,6 +286,43 @@ def parse_repo(
             if page_id in by_id and method_id in by_id:
                 edges.append(Edge(page_id, method_id, "HANDLES"))
 
+    # TRIGGERS — client-side __doPostBack -> the server handler that runs.
+    # This closes the WebForms client/server gap: without it, changing a handler
+    # never surfaces the JavaScript that fires it.
+    handlers_by_page: dict[str, dict[str, str]] = {}
+    for pf in parsed:
+        for page_id, mapping in pf.control_handlers.items():
+            handlers_by_page[page_id] = mapping
+    # which pages pull in which script files
+    pages_using: dict[str, list[str]] = defaultdict(list)
+    for pf in parsed:
+        src_id = pf.symbols[0].id
+        for mod in pf.imported_modules:
+            if mod in index.file_ids:
+                pages_using[mod].append(src_id)
+
+    for pf in parsed:
+        for sym_id, targets in pf.postback_targets.items():
+            owner_file = sym_id.split("::")[0]
+            # an inline block belongs to its own page; a .js file to its users
+            candidate_pages = ([owner_file] if owner_file in handlers_by_page
+                               else pages_using.get(owner_file, []))
+            for control_id in targets:
+                for page_id in candidate_pages:
+                    mapping = handlers_by_page.get(page_id, {})
+                    handler = mapping.get(control_id)
+                    if not handler:
+                        continue
+                    class_name = pf.codebehind.get(page_id) or _codebehind_of(
+                        parsed, page_id
+                    )
+                    class_id = (class_name if class_name in by_id
+                                else index.classes_by_name.get(
+                                    (class_name or "").split(".")[-1]))
+                    target_id = f"{class_id}.{handler}" if class_id else None
+                    if target_id and target_id in by_id and sym_id in by_id:
+                        edges.append(Edge(sym_id, target_id, "TRIGGERS"))
+
     # EXECUTES — method -> stored procedure, once procs are in the graph (§5.4)
     procs_by_name = {s.name.lower(): s.id for s in symbols if s.kind == "proc"}
     for sym in symbols:
@@ -277,6 +332,13 @@ def parse_repo(
                 edges.append(Edge(sym.id, target, "EXECUTES"))
 
     return symbols, edges
+
+
+def _codebehind_of(parsed: list[ParsedFile], page_id: str) -> str:
+    for pf in parsed:
+        if page_id in pf.codebehind:
+            return pf.codebehind[page_id]
+    return ""
 
 
 _RESOLVERS = {mod.LANGUAGE: mod.resolve_call for mod in _EXTRACTORS}
