@@ -141,6 +141,48 @@ MATCH (p:Symbol {kind:'page'})-[:HANDLES]->(m) RETURN p.name, count(m) LIMIT 10;
 page, the graph is trustworthy. If it misses things you know exist, that tells
 you more than any metric.
 
+### 3a. API access: authentication, repo names, CORS
+
+Set in `.env` and read by `api/auth.py` / `api/main.py`. The API refuses to start
+on an invalid combination.
+
+| `AUTH_MODE` | Use | Requires |
+|---|---|---|
+| `none` | local development only, every route open | nothing |
+| `token` | scripts, CI | `API_TOKEN` (32+ chars); send `Authorization: Bearer <token>` |
+| `alb` | production behind an AWS ALB with Cognito login | `ALB_ARN`; the API verifies the ALB's signed `x-amzn-oidc-data` header |
+
+`/health` is always open, for load-balancer health checks.
+
+`POST /index {"repo": "YourApp"}` and `POST /impact {"repo": "YourApp"}` take a
+**directory name** under `./repos`. Paths, `..`, and symlinks pointing outside
+`./repos` are rejected.
+
+`/ask`, `POST /impact` and `/impact/{id}/ask` call the LLM and are limited to
+`LLM_RATE_PER_MIN` calls per user per minute (default 20; `0` disables). The
+limit is per api process, so also rate-limit at the load balancer when scaling out.
+
+Cost bounds on those routes, all set in `.env`:
+
+| Limit | Default | When hit |
+|---|---|---|
+| `MAX_QUESTION_CHARS` | 4000 | request rejected with 422 before any work |
+| `AGENT_TOKEN_BUDGET` | 150000 | the question stops; one short final answer (1024 tokens, cheaper model) |
+| `AGENT_TIMEOUT_S` | 120 | the question stops with no further LLM call |
+| `LLM_TIMEOUT_S` | 60 | one provider call is abandoned (2 retries) |
+| `DAILY_TOKEN_QUOTA` | 2000000 | 429 until 00:00 UTC; stored in Neo4j, survives restarts |
+
+Every response from `/ask` includes `usage` (tokens spent) and `stopped` (`null`,
+`"token budget"` or `"time limit"`). Today's usage per user:
+`MATCH (q:UsageQuota) RETURN q.user, q.day, q.tokens ORDER BY q.tokens DESC`.
+
+`POST /ask {"question": "...", "repo": "YourApp"}` binds every graph tool to that
+repo on the server, so code in one repo cannot steer the agent into reading
+another. For the MCP server, set `TOOLS_REPO=YourApp`. Unset = all repos.
+
+CORS is off: the web UI calls the API same-origin through nginx. Set
+`CORS_ORIGINS=https://exact.origin` only for a cross-origin client; `*` is refused.
+
 ---
 
 ## 4. Re-index when someone pushes
@@ -157,6 +199,36 @@ Cheap by design:
 
 **Trigger it on merge to main, in CI.** Not on local edits, not per commit.
 A stale graph guiding a refactor is worse than no graph — someone must own this.
+
+### 4a. Impact report for a commit — run BEFORE re-indexing
+
+The graph indexed at the old commit is the only record of who depended on the
+old code, so analyse first, re-index second:
+
+```bash
+# free: git + Cypher, no LLM. Base defaults to the commit the graph was indexed at.
+docker compose run --rm api python -m impact /repos/YourApp --repo yourapp
+
+# explicit range, JSON copy, and an LLM review from the report (cheap: digest only)
+docker compose run --rm api python -m impact /repos/YourApp --repo yourapp \
+    --base <sha> --head HEAD --json /tmp/impact.json --ask
+
+# a specific question; then bring the graph up to head (working tree must BE head)
+docker compose run --rm api python -m impact /repos/YourApp --repo yourapp \
+    --ask "which pages break?" --reindex
+```
+
+Over HTTP: `POST /impact {"repo": "YourApp", "explain": true}`. `repo` is a
+directory name under `./repos`, never a path (see §3a). Reports are stored in Neo4j: `GET /impact`, `GET /impact/{id}`,
+and `POST /impact/{id}/ask {"question": "..."}` for follow-ups without recomputing.
+
+The report lists changed symbols (added / removed / modified / signature
+changed), every upstream dependent with its distance and path back to the change,
+importers, Leiden communities touched, and deterministic risk flags
+(`REMOVED_BUT_STILL_REFERENCED`, `SIGNATURE_CHANGED_CALLERS_UNTOUCHED`,
+`HUB_CHANGED`, `NO_TESTS_IN_BLAST_RADIUS`, `CROSSES_COMMUNITIES`). It refuses to
+run on an unindexed repo, and warns when the diff base is not the indexed commit.
+It under-reports by the call-resolution gap (§1), and never invents a dependency.
 
 ---
 

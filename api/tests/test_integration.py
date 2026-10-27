@@ -49,14 +49,18 @@ def indexed_graph():
     os.environ["NEO4J_PASSWORD"] = PASSWORD
     graph.close_driver()  # force a fresh driver on the test URI
 
-    # deterministic stand-in for the Haiku summary pass
+    # deterministic stand-in for the Haiku summary pass — restored afterwards,
+    # or every later test in the session silently gets the fake summarizer
+    real = summarize.summarize_symbol, summarize.summarize_community
     summarize.summarize_symbol = lambda s: f"{s.kind} {s.name} in {s.path}"
     summarize.summarize_community = lambda name, members: f"cluster of {len(members)}"
-
-    stats = indexer.index_repo(FIXTURE)
-    yield stats
-    graph.clear_graph()
-    graph.close_driver()
+    try:
+        stats = indexer.index_repo(FIXTURE)
+        yield stats
+    finally:
+        summarize.summarize_symbol, summarize.summarize_community = real
+        graph.clear_graph()
+        graph.close_driver()
 
 
 def test_index_writes_expected_counts(indexed_graph):

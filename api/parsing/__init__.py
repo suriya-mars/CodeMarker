@@ -19,7 +19,7 @@ import os
 from collections import Counter, defaultdict
 
 from . import aspx_ext, csharp_ext, css_ext, js_ext, python_ext
-from .base import Edge, GlobalIndex, ParsedFile, Symbol, to_dict
+from .base import Edge, GlobalIndex, ParsedFile, Symbol, rel_path, to_dict
 
 __all__ = [
     "Edge",
@@ -71,6 +71,23 @@ _VENDOR_DIRS = {"lib", "libs", "vendor", "vendors", "third-party", "thirdparty",
                 "bower_components", "jspm_packages", "wwwroot/lib"}
 
 
+# Hostile-input limits. A repo is untrusted input: a 200MB file or a binary blob
+# with a .js extension must not exhaust the parser's memory, or cost one LLM
+# summary per junk symbol. Override with MAX_FILE_BYTES.
+_DEFAULT_MAX_FILE_BYTES = 1_000_000
+_BINARY_SNIFF = 8192
+
+
+def _max_file_bytes() -> int:
+    return int(os.environ.get("MAX_FILE_BYTES", _DEFAULT_MAX_FILE_BYTES))
+
+
+def inside(path: str, root: str) -> bool:
+    """True if `path`, with every symlink resolved, is within `root`."""
+    real, base = os.path.realpath(path), os.path.realpath(root)
+    return real == base or real.startswith(base + os.sep)
+
+
 def iter_source_files(repo_root: str):
     """Yield every file any registered extractor can handle.
 
@@ -78,12 +95,17 @@ def iter_source_files(repo_root: str):
     NOTHING rather than failing, which silently turns a typo (or a host path
     passed into a container) into "0 symbols found" — a wrong answer that looks
     like a real one.
+
+    Symlinks are never followed. A repo is untrusted: `config.aspx ->
+    /proc/self/environ` would otherwise index the api container's environment —
+    LLM keys and the Neo4j password — into the graph, send it to the LLM, and
+    serve it back through get_definition.
     """
     if not os.path.isdir(repo_root):
         raise NotADirectoryError(
             f"{repo_root!r} is not a directory that this process can see"
         )
-    for dirpath, dirnames, filenames in os.walk(repo_root):
+    for dirpath, dirnames, filenames in os.walk(repo_root):  # followlinks=False
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         parts = {p.lower() for p in dirpath.replace(os.sep, "/").split("/")}
         if parts & _VENDOR_DIRS:
@@ -95,14 +117,39 @@ def iter_source_files(repo_root: str):
             if low.endswith((".js", ".css")) and any(v in low for v in _VENDOR_NAMES):
                 continue  # vendored library — see _VENDOR_NAMES
             ext = os.path.splitext(fn)[1].lower()
-            if ext in _BY_EXT:
-                yield os.path.join(dirpath, fn)
+            if ext not in _BY_EXT:
+                continue
+            path = os.path.join(dirpath, fn)
+            if os.path.islink(path) or not inside(path, repo_root):
+                print(f"[parse] skipped symlink {path}")
+                continue
+            yield path
+
+
+def _unsafe_reason(file_path: str, repo_root: str) -> str | None:
+    """Why a file must not be parsed, or None. Checked for EVERY parse —
+    full index and impact re-parse alike — so no caller can bypass it."""
+    if os.path.islink(file_path) or not inside(file_path, repo_root):
+        return "symlink or outside the repo"
+    size = os.path.getsize(file_path)
+    if size > _max_file_bytes():
+        return f"{size:,} bytes exceeds MAX_FILE_BYTES"
+    with open(file_path, "rb") as f:
+        if b"\0" in f.read(_BINARY_SNIFF):
+            return "binary content"
+    return None
 
 
 def parse_file(file_path: str, repo_root: str) -> ParsedFile | None:
     ext = os.path.splitext(file_path)[1].lower()
     mod = _BY_EXT.get(ext)
-    return mod.parse_file(file_path, repo_root) if mod else None
+    if mod is None:
+        return None
+    reason = _unsafe_reason(file_path, repo_root)
+    if reason:
+        print(f"[parse] skipped {file_path}: {reason}")
+        return None
+    return mod.parse_file(file_path, repo_root)
 
 
 # --- phase 2: repo-wide resolution ------------------------------------------
@@ -220,6 +267,7 @@ def parse_repo(
     counters.setdefault("calls_seen", 0)
     counters.setdefault("calls_resolved", 0)
     counters.setdefault("unresolved_names", Counter())
+    counters.setdefault("failed_paths", [])
 
     parsed: list[ParsedFile] = []
     for path in iter_source_files(repo_root):
@@ -230,6 +278,7 @@ def parse_repo(
                 counters["files_parsed"] += 1
         except Exception as exc:  # noqa: BLE001 — one bad file must not kill indexing
             counters["files_failed"] += 1
+            counters["failed_paths"].append(rel_path(path, repo_root))
             print(f"[parse] skipped {path}: {exc}")
 
     symbols, by_id = _collect_symbols(parsed)

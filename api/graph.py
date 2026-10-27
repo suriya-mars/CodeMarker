@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from neo4j import Driver, GraphDatabase
+from neo4j import Driver, GraphDatabase, NotificationDisabledClassification
 
 _driver: Driver | None = None
 
@@ -21,8 +21,24 @@ def get_driver() -> Driver:
     global _driver
     if _driver is None:
         uri = os.environ.get("NEO4J_URI", "bolt://neo4j:7687")
-        password = os.environ.get("NEO4J_PASSWORD", "change-me")
-        _driver = GraphDatabase.driver(uri, auth=("neo4j", password))
+        password = os.environ.get("NEO4J_PASSWORD", "")
+        # No default: a fallback password is a password every deployment shares.
+        if not password or password == "change-me":
+            raise RuntimeError(
+                "NEO4J_PASSWORD is unset or still the 'change-me' placeholder; "
+                "set a real password in .env"
+            )
+        # UNRECOGNIZED = "relationship type does not exist". Traversals name every
+        # edge type (HANDLES, EXECUTES, ...) and a Python-only repo has none of
+        # the WebForms ones, so without this every blast-radius query logs a
+        # warning for a type that is simply, and correctly, absent.
+        _driver = GraphDatabase.driver(
+            uri,
+            auth=("neo4j", password),
+            notifications_disabled_classifications=[
+                NotificationDisabledClassification.UNRECOGNIZED
+            ],
+        )
     return _driver
 
 
@@ -58,6 +74,10 @@ SCHEMA_STATEMENTS = [
     """
     CREATE CONSTRAINT community_id IF NOT EXISTS
       FOR (c:Community) REQUIRE c.id IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT usage_quota_key IF NOT EXISTS
+      FOR (q:UsageQuota) REQUIRE q.key IS UNIQUE
     """,
     """
     CREATE FULLTEXT INDEX symbol_summaries IF NOT EXISTS

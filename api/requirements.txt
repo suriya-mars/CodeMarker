@@ -1,4 +1,6 @@
 fastapi
+# verifies the ALB's signed login header (auth.py, AUTH_MODE=alb)
+PyJWT[crypto]
 uvicorn[standard]
 neo4j
 # tree-sitter-languages ships prebuilt grammars but only links against the

@@ -10,6 +10,9 @@ in DISPATCH.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import os
 import re
 from typing import Any
 
@@ -22,6 +25,46 @@ _SYMBOL_FIELDS = (
     "s.summary AS summary, s.signature AS signature, s.language AS language, "
     "s.community_id AS community_id"
 )
+
+
+_MAX_LIMIT = 100
+
+
+def _cap(limit: Any, default: int) -> int:
+    """Tool arguments are chosen by the model, which reads untrusted repo text:
+    an injected `limit=1000000000` must not turn one call into a full scan."""
+    try:
+        return max(1, min(int(limit), _MAX_LIMIT))
+    except (TypeError, ValueError):
+        return default
+
+
+# --- Repo scope --------------------------------------------------------------
+# Which repo a tool may read is decided by the SERVER per request (the /ask
+# handler, the impact analysis, or TOOLS_REPO for an MCP server), never by a
+# tool argument: if the model could choose, text injected into one repo could
+# send it to read another. '' = unscoped, for a single-repo deployment.
+_SCOPE: contextvars.ContextVar[str | None] = contextvars.ContextVar("tools_repo", default=None)
+
+
+def _repo() -> str:
+    scoped_to = _SCOPE.get()
+    return scoped_to if scoped_to is not None else os.environ.get("TOOLS_REPO", "")
+
+
+@contextlib.contextmanager
+def scoped(repo: str):
+    """Bind every tool call in this block to one repo."""
+    token = _SCOPE.set(repo or "")
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
+def _in(var: str) -> str:
+    """Cypher predicate: `var` belongs to the current repo scope."""
+    return f"($repo = '' OR {var}.repo = $repo)"
 
 
 def _clean_lucene(query: str) -> str:
@@ -37,14 +80,15 @@ def find_symbol(query: str, kind: str | None = None, limit: int = 8) -> list[dic
     """Lexical full-text search over Symbol summaries + names (the vectorless
     entry point). Searches summaries, not raw code."""
     kind_filter = ""
-    params: dict[str, Any] = {"query": _clean_lucene(query), "limit": int(limit)}
+    params: dict[str, Any] = {"query": _clean_lucene(query), "limit": _cap(limit, 8),
+                              "repo": _repo()}
     if kind in _KINDS:  # validated enum — safe to interpolate
-        kind_filter = f"WHERE node.kind = '{kind}'"
+        kind_filter = f"AND s.kind = '{kind}'"
     cypher = f"""
         CALL db.index.fulltext.queryNodes('symbol_summaries', $query)
         YIELD node, score
         WITH node AS s, score
-        {kind_filter}
+        WHERE {_in("s")} {kind_filter}
         RETURN {_SYMBOL_FIELDS}, score
         ORDER BY score DESC
         LIMIT $limit
@@ -59,18 +103,21 @@ def list_communities(limit: int = 40) -> list[dict[str, Any]]:
     Bounded: a 2M-LOC repo yields thousands of communities, and returning them all
     would flood the context window. Largest-first, so the truncation keeps the
     architecturally significant ones."""
-    limit = max(1, min(int(limit), 100))
+    limit = _cap(limit, 40)
+    in_scope = "($repo = '' OR EXISTS { (:Symbol {repo: $repo})-[:IN_COMMUNITY]->(c) })"
     rows = graph._run(
-        """
-        MATCH (c:Community)
+        f"""
+        MATCH (c:Community) WHERE {in_scope}
         RETURN c.id AS id, c.name AS name, c.summary AS summary,
                c.member_count AS member_count
         ORDER BY c.member_count DESC
         LIMIT $limit
         """,
         limit=limit,
+        repo=_repo(),
     )
-    total = graph._run("MATCH (c:Community) RETURN count(c) AS n")
+    total = graph._run(f"MATCH (c:Community) WHERE {in_scope} RETURN count(c) AS n",
+                       repo=_repo())
     n = total[0]["n"] if total else len(rows)
     if n > len(rows):
         rows.append({"note": f"{n - len(rows)} smaller communities not shown; "
@@ -83,12 +130,14 @@ def get_community(community_id: str, limit: int = 25) -> list[dict[str, Any]]:
     return graph._run(
         f"""
         MATCH (s:Symbol)-[:IN_COMMUNITY]->(c:Community {{id: $community_id}})
+        WHERE {_in("s")}
         RETURN {_SYMBOL_FIELDS}
         ORDER BY s.kind, s.name
         LIMIT $limit
         """,
         community_id=community_id,
-        limit=int(limit),
+        limit=_cap(limit, 25),
+        repo=_repo(),
     )
 
 
@@ -97,12 +146,14 @@ def get_callers(symbol_id: str, limit: int = 15) -> list[dict[str, Any]]:
     return graph._run(
         f"""
         MATCH (s:Symbol)-[r:CALLS]->(target:Symbol {{id: $symbol_id}})
+        WHERE {_in("s")} AND {_in("target")}
         RETURN {_SYMBOL_FIELDS}, r.count AS call_count
         ORDER BY call_count DESC
         LIMIT $limit
         """,
         symbol_id=symbol_id,
-        limit=int(limit),
+        limit=_cap(limit, 15),
+        repo=_repo(),
     )
 
 
@@ -111,12 +162,14 @@ def get_callees(symbol_id: str, limit: int = 15) -> list[dict[str, Any]]:
     return graph._run(
         f"""
         MATCH (source:Symbol {{id: $symbol_id}})-[r:CALLS]->(s:Symbol)
+        WHERE {_in("s")} AND {_in("source")}
         RETURN {_SYMBOL_FIELDS}, r.count AS call_count
         ORDER BY call_count DESC
         LIMIT $limit
         """,
         symbol_id=symbol_id,
-        limit=int(limit),
+        limit=_cap(limit, 15),
+        repo=_repo(),
     )
 
 
@@ -124,8 +177,8 @@ def get_definition(symbol_id: str) -> dict[str, Any]:
     """Full detail for one symbol: source, location, and its containment context
     (parent + children via CONTAINS, inheritance, imports)."""
     rows = graph._run(
-        """
-        MATCH (s:Symbol {id: $symbol_id})
+        f"""
+        MATCH (s:Symbol {{id: $symbol_id}}) WHERE {_in("s")}
         OPTIONAL MATCH (parent:Symbol)-[:CONTAINS]->(s)
         OPTIONAL MATCH (s)-[:CONTAINS]->(child:Symbol)
         OPTIONAL MATCH (s)-[:INHERITS]->(base:Symbol)
@@ -138,6 +191,7 @@ def get_definition(symbol_id: str) -> dict[str, Any]:
                collect(DISTINCT base.id) AS inherits
         """,
         symbol_id=symbol_id,
+        repo=_repo(),
     )
     if not rows:
         return {"error": f"no symbol with id '{symbol_id}'"}
@@ -155,14 +209,16 @@ def get_blast_radius(symbol_id: str, depth: int = 3, limit: int = 40) -> list[di
     depth = max(1, min(int(depth), 5))  # validated int — safe to interpolate
     return graph._run(
         f"""
-        MATCH (s:Symbol)-[:CALLS|HANDLES*1..{depth}]->(:Symbol {{id: $symbol_id}})
+        MATCH (s:Symbol)-[:CALLS|HANDLES*1..{depth}]->(t:Symbol {{id: $symbol_id}})
+        WHERE {_in("s")} AND {_in("t")}
         WITH DISTINCT s
         RETURN {_SYMBOL_FIELDS}, s.is_webforms AS is_webforms
         ORDER BY s.kind, s.id
         LIMIT $limit
         """,
         symbol_id=symbol_id,
-        limit=int(limit),
+        limit=_cap(limit, 40),
+        repo=_repo(),
     )
 
 
@@ -172,21 +228,24 @@ def get_migration_blockers(symbol_id: str | None = None, limit: int = 25) -> lis
     no argument, ranks the whole app's pages by how blocked they are."""
     if symbol_id:
         return graph._run(
-            """
-            MATCH (:Symbol {id: $symbol_id})-[:CONTAINS|HANDLES|CALLS*0..3]->(m:Symbol)
+            f"""
+            MATCH (root:Symbol {{id: $symbol_id}})-[:CONTAINS|HANDLES|CALLS*0..3]->(m:Symbol)
             WHERE m.legacy_apis IS NOT NULL AND size(m.legacy_apis) > 0
+              AND {_in("root")} AND {_in("m")}
             RETURN DISTINCT m.id AS id, m.name AS name, m.path AS path,
                    m.legacy_apis AS legacy_apis
             ORDER BY size(m.legacy_apis) DESC, m.id
             LIMIT $limit
             """,
             symbol_id=symbol_id,
-            limit=int(limit),
+            limit=_cap(limit, 25),
+            repo=_repo(),
         )
     return graph._run(
-        """
-        MATCH (p:Symbol {kind: 'page'})-[:HANDLES|CONTAINS*1..3]->(m:Symbol)
+        f"""
+        MATCH (p:Symbol {{kind: 'page'}})-[:HANDLES|CONTAINS*1..3]->(m:Symbol)
         WHERE m.legacy_apis IS NOT NULL AND size(m.legacy_apis) > 0
+          AND {_in("p")} AND {_in("m")}
         UNWIND m.legacy_apis AS api
         WITH p, collect(DISTINCT m.id) AS methods, collect(DISTINCT api) AS apis
         RETURN p.id AS id, p.name AS name, p.path AS path,
@@ -194,7 +253,8 @@ def get_migration_blockers(symbol_id: str | None = None, limit: int = 25) -> lis
         ORDER BY size(apis) DESC, blocker_methods DESC
         LIMIT $limit
         """,
-        limit=int(limit),
+        limit=_cap(limit, 25),
+        repo=_repo(),
     )
 
 
@@ -210,15 +270,17 @@ def get_page_brief(page_id: str, depth: int = 3) -> dict[str, Any]:
     """
     depth = max(1, min(int(depth), 5))  # validated int — safe to interpolate
 
+    repo = _repo()
     rows = graph._run(
-        """
-        MATCH (n:Symbol {id: $id})
-        OPTIONAL MATCH (p:Symbol {kind: 'page'})-[:HANDLES]->(n)
+        f"""
+        MATCH (n:Symbol {{id: $id}}) WHERE {_in("n")}
+        OPTIONAL MATCH (p:Symbol {{kind: 'page'}})-[:HANDLES]->(n)
         RETURN n.id AS id, n.kind AS kind, n.name AS name, n.path AS path,
                n.summary AS summary, n.is_webforms AS is_webforms,
                collect(DISTINCT p.id)[0] AS owning_page
         """,
         id=page_id,
+        repo=repo,
     )
     if not rows:
         return {"error": f"no symbol with id '{page_id}'"}
@@ -246,12 +308,14 @@ def get_page_brief(page_id: str, depth: int = 3) -> dict[str, Any]:
         MATCH (p:Symbol {{id: $id}})-[:HANDLES]->(h:Symbol)
         WHERE h.kind = 'method'
         MATCH (h)-[:CALLS*0..{depth}]->(d:Symbol)
+        WHERE {_in("d")}
         WITH DISTINCT d
         RETURN {_REACH_FIELDS}
         ORDER BY d.id
         LIMIT 60
         """,
         id=root,
+        repo=repo,
     )
 
     # Interface indirection: `_svc.Save()` resolves to IOrderService.Save, which
@@ -266,13 +330,14 @@ def get_page_brief(page_id: str, depth: int = 3) -> dict[str, Any]:
         MATCH (iface:Symbol)-[:CONTAINS]->(m)
         MATCH (impl_type:Symbol)-[:INHERITS]->(iface)
         MATCH (impl_type)-[:CONTAINS]->(d:Symbol)
-        WHERE d.name = m.name AND d.id <> m.id
+        WHERE d.name = m.name AND d.id <> m.id AND {_in("d")}
         WITH DISTINCT d
         RETURN {_REACH_FIELDS}
         ORDER BY d.id
         LIMIT 40
         """,
         id=root,
+        repo=repo,
     )
     seen_reach = {r["id"] for r in reach}
     for r in impls:
@@ -286,13 +351,14 @@ def get_page_brief(page_id: str, depth: int = 3) -> dict[str, Any]:
         f"""
         MATCH (p:Symbol {{id: $id}})-[:HANDLES]->(own:Symbol)
         MATCH (caller:Symbol)-[:CALLS*1..{depth}]->(own)
-        WHERE NOT (p)-[:HANDLES]->(caller)
+        WHERE NOT (p)-[:HANDLES]->(caller) AND {_in("caller")}
         WITH DISTINCT caller
         RETURN caller.id AS id, caller.path AS path, caller.kind AS kind
         ORDER BY caller.id
         LIMIT 40
         """,
         id=root,
+        repo=repo,
     )
 
     controls = graph._run(

@@ -45,6 +45,20 @@ docker compose up -d
 Ask a question in the chat panel; the traced symbols and the edges between them
 light up in the graph.
 
+## What does a commit break?
+
+After a push, before re-indexing:
+
+```bash
+docker compose run --rm api python -m impact /repos/<repo-name> --ask
+```
+
+Diffs from the commit the graph was indexed at, re-parses only the changed files,
+and reports the blast radius from the graph: changed symbols, every dependent and
+its path back to the change, architectural areas touched, and risk flags. The
+report is free (no LLM). `--ask` has the LLM explain it from a compact digest,
+using the summaries already in the graph instead of source. See RUNBOOK §4a.
+
 ## Layout
 
 ```

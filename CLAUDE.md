@@ -205,6 +205,7 @@ codebase-explorer/
 │   ├── summarize.py          # LLM summaries for Symbols and Communities
 │   ├── community.py          # Leiden over the CALLS graph
 │   ├── indexer.py            # orchestrates: parse → graph → summaries → leiden  (CLI: python -m indexer <path>)
+│   ├── impact.py             # commit blast-radius report (git diff → graph BFS → risk) + LLM over the report
 │   ├── tools.py              # graph tool defs (TOOLS) + Cypher dispatch
 │   ├── agent.py              # the navigation loop (ask())
 │   ├── main.py               # FastAPI: POST /index, POST /ask, GET /graph

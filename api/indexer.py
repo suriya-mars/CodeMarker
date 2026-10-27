@@ -73,31 +73,53 @@ def write_symbols(symbols: list[Symbol], *, repo: str = "", run_id: str = "") ->
         )
 
 
-def delete_stale(repo: str, run_id: str) -> int:
-    """Remove symbols of this repo that the latest parse did not see.
+def delete_stale(repo: str, run_id: str, keep_paths: list[str] | None = None) -> int:
+    """Remove symbols AND parsed edges of this repo that the latest parse did
+    not see.
 
     MERGE only adds and updates, so without this a deleted method lingers in the
     graph forever and blast radius reports dependencies on code that is gone.
-    Scoped by `repo` so indexing one codebase never disturbs another sharing the
-    same database.
+    Edges get the same treatment: when `a()` stops calling `b()` and both still
+    exist, the old CALLS edge would otherwise survive every re-index and keep
+    `a` in `b`'s blast radius. Scoped by `repo` so indexing one codebase never
+    disturbs another sharing the same database.
+
+    `keep_paths` are files that FAILED to parse this run. Their symbols were not
+    seen, but the code still exists — deleting them would turn a transient parse
+    error into silently missing code (and re-paid summaries).
     """
     if not repo or not run_id:
         return 0
+    keep = keep_paths or []
+    rel_types = "|".join(sorted(_EDGE_TYPES))  # validated enum — safe to interpolate
+    graph._run(
+        f"""
+        MATCH (a:Symbol {{repo: $repo}})-[r:{rel_types}]->(b:Symbol)
+        WHERE (r.last_seen IS NULL OR r.last_seen <> $run_id)
+          AND NOT any(p IN split(a.path, ';') + split(b.path, ';') WHERE p IN $keep)
+        DELETE r
+        """,
+        repo=repo,
+        run_id=run_id,
+        keep=keep,
+    )
     rows = graph._run(
         """
         MATCH (s:Symbol {repo: $repo})
-        WHERE s.last_seen IS NULL OR s.last_seen <> $run_id
+        WHERE (s.last_seen IS NULL OR s.last_seen <> $run_id)
+          AND NOT any(p IN split(s.path, ';') WHERE p IN $keep)
         WITH s, count(*) AS _
         DETACH DELETE s
         RETURN count(*) AS removed
         """,
         repo=repo,
         run_id=run_id,
+        keep=keep,
     )
     return rows[0]["removed"] if rows else 0
 
 
-def write_edges(edges: list[Edge]) -> None:
+def write_edges(edges: list[Edge], *, run_id: str = "") -> None:
     for edge_type in _EDGE_TYPES:
         rows = [
             {"src": e.src, "dst": e.dst, "count": e.count}
@@ -112,10 +134,10 @@ def write_edges(edges: list[Edge]) -> None:
             MATCH (a:Symbol {{id: row.src}})
             MATCH (b:Symbol {{id: row.dst}})
             MERGE (a)-[r:{edge_type}]->(b)
-            SET r.count = row.count
+            SET r.count = row.count, r.last_seen = $run_id
         """
         for batch in _batches(rows):
-            graph._run(cypher, rows=batch)
+            graph._run(cypher, rows=batch, run_id=run_id)
 
 
 def pending_summaries(limit: int | None = None) -> list[Symbol]:
@@ -283,6 +305,19 @@ def write_profile(prof) -> None:
     )
 
 
+def record_commit(repo: str, repo_path: str) -> None:
+    """Remember which commit the graph reflects. Impact analysis diffs from it:
+    the blast radius is exact only when the diff base IS the indexed commit."""
+    import impact  # local: impact imports parsing/graph, not indexer
+
+    commit = impact.git_head(repo_path)
+    if commit:
+        graph._run(
+            "MERGE (r:RepoState {repo: $repo}) SET r.commit = $commit, r.indexed_at = $t",
+            repo=repo, commit=commit, t=time.time(),
+        )
+
+
 def load_call_edges() -> list[Edge]:
     """Read the CALLS graph back from Neo4j so community detection can run as a
     standalone stage — without re-parsing 2M LOC."""
@@ -342,14 +377,19 @@ def index_repo(
         run_id = uuid.uuid4().hex
         print(f"[index] parsing {repo_path}  (repo={repo_name})")
         t0 = time.time()
-        symbols, edges = parse_repo(repo_path)
+        stats: dict[str, Any] = {}
+        symbols, edges = parse_repo(repo_path, stats)
         print(f"[index] {len(symbols):,} symbols, {len(edges):,} edges "
               f"in {time.time()-t0:.0f}s")
         write_symbols(symbols, repo=repo_name, run_id=run_id)
-        write_edges(edges)
-        removed = delete_stale(repo_name, run_id)
+        write_edges(edges, run_id=run_id)
+        if stats["failed_paths"]:
+            print(f"[index] {len(stats['failed_paths'])} file(s) failed to parse; "
+                  f"keeping their previously indexed symbols")
+        removed = delete_stale(repo_name, run_id, keep_paths=stats["failed_paths"])
         if removed:
             print(f"[index] removed {removed:,} symbols for code that no longer exists")
+        record_commit(repo_name, repo_path)
         result |= {"symbols": len(symbols), "edges": len(edges), "removed": removed}
         del symbols, edges  # release before the long LLM stage
 
