@@ -1,0 +1,7 @@
+# Local ML guardrails (guard.py). Separate from requirements.txt because it
+# brings PyTorch: install with the CPU wheel index, or pip pulls the multi-GB
+# CUDA build:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-guard.txt
+# Pinned exactly: this is a security dependency, and its last release was May
+# 2025 — upgrades must be deliberate and re-measured (see guard.py).
+llm-guard==0.3.16

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 import auth
 import impact
+import quota
 import indexer
 
 ARN = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/explorer/abc123"
@@ -26,7 +27,9 @@ def _client(monkeypatch, **env):
     """A fresh app built under `env` — CORS and the config check run at import."""
     for k in ("AUTH_MODE", "API_TOKEN", "ALB_ARN", "CORS_ORIGINS"):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("DAILY_TOKEN_QUOTA", "0")  # quota has its own tests (Neo4j-backed)
+    # quota is Neo4j-backed and has its own tests; keep these database-free
+    monkeypatch.setattr(quota, "limit_for", lambda request: 0)
+    monkeypatch.setattr(quota, "charge", lambda request, usage: None)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     import main

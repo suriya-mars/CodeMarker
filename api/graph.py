@@ -80,6 +80,10 @@ SCHEMA_STATEMENTS = [
       FOR (q:UsageQuota) REQUIRE q.key IS UNIQUE
     """,
     """
+    CREATE CONSTRAINT user_quota_user IF NOT EXISTS
+      FOR (u:UserQuota) REQUIRE u.user IS UNIQUE
+    """,
+    """
     CREATE FULLTEXT INDEX symbol_summaries IF NOT EXISTS
       FOR (n:Symbol) ON EACH [n.summary, n.name]
     """,

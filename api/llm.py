@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import guard
 import telemetry
 import untrusted
 
@@ -63,7 +64,10 @@ def redact(text: str) -> str:
     text = untrusted.strip_invisible(text)
     for pat in _SECRET_PATTERNS:
         text = pat.sub(REDACTED, text)
-    return _ASSIGNED_SECRET.sub(lambda m: m.group(1) + REDACTED, text)
+    text = _ASSIGNED_SECRET.sub(lambda m: m.group(1) + REDACTED, text)
+    # detect-secrets' maintained rules catch formats our list does not; ours
+    # catch quoted assignments it misses. Both run.
+    return guard.mask_secrets(text)
 
 
 def _redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -110,6 +114,12 @@ class LLMResponse:
     # and callers can charge a per-user quota. 0 when the provider omits usage.
     input_tokens: int = 0
     output_tokens: int = 0
+    # The model that actually ran (OPENAI_MODEL under the openai provider, not
+    # the Claude name the caller asked for) and its estimated cost — priced
+    # here, once, from the same table as /usage, so per-user cost and the
+    # process totals can never disagree.
+    model: str = ""
+    cost_usd: float = 0.0
 
     @property
     def tokens(self) -> int:
@@ -271,7 +281,8 @@ def _create_message_anthropic(
             )
     tokens_in, tokens_out = _usage(resp)
     return LLMResponse(content=content, stop_reason=resp.stop_reason,
-                       input_tokens=tokens_in, output_tokens=tokens_out)
+                       input_tokens=tokens_in, output_tokens=tokens_out, model=model,
+                       cost_usd=telemetry.cost_of(model, tokens_in, tokens_out))
 
 
 def _create_message_openai(
@@ -323,8 +334,10 @@ def _create_message_openai(
         )
     stop_reason = "tool_use" if choice.finish_reason == "tool_calls" else "end_turn"
     tokens_in, tokens_out = _usage(resp)
+    used = _openai_model()
     return LLMResponse(content=content, stop_reason=stop_reason,
-                       input_tokens=tokens_in, output_tokens=tokens_out)
+                       input_tokens=tokens_in, output_tokens=tokens_out, model=used,
+                       cost_usd=telemetry.cost_of(used, tokens_in, tokens_out))
 
 
 def _to_openai_messages(msg: dict[str, Any]) -> list[dict[str, Any]]:

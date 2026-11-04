@@ -22,6 +22,7 @@ from typing import Any
 
 import community as community_mod
 import graph
+import guard
 import scale
 import summarize
 from parsing import Edge, Symbol, parse_repo
@@ -394,6 +395,8 @@ def index_repo(
         del symbols, edges  # release before the long LLM stage
 
     if "summarize" in stages:
+        guard.check_config()  # summaries are where injected code is first read
+        guard.preload()
         n_sym, _ = counts()
         prof = scale.derive(n_sym, 0)
         print("[index] summarizing symbols (LLM)")

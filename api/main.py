@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 import agent
 import auth
 import graph
+import guard
 import impact
 import indexer
 import quota
@@ -25,6 +26,8 @@ import telemetry
 import tools
 
 auth.check_config()  # fail at boot on a bad AUTH_MODE, never per request
+guard.check_config()  # likewise: never silently run without the ML guardrails
+guard.preload()
 # Every route requires a user; auth.require_user exempts only /health.
 app = FastAPI(title="Codebase Explorer", dependencies=[Depends(auth.require_user)])
 
@@ -116,6 +119,23 @@ def usage() -> dict[str, Any]:
     """Token, cost, and latency totals for this process — the answer to
     'what is this costing us?'. Counts only; no prompts are ever recorded."""
     return telemetry.snapshot()
+
+
+@app.get("/me/usage")
+def my_usage(request: Request, days: int = 30) -> dict[str, Any]:
+    """The caller's OWN usage: tokens, estimated cost and questions per day.
+    Never anyone else's — the all-users view is the operator CLI
+    (`python -m quota report`) until the API has an admin role."""
+    rows = quota.usage_report(days, auth.user_key(request))
+    return {
+        "user": auth.user_key(request),
+        "days": rows,
+        "total": {"questions": sum(r["questions"] for r in rows),
+                  "tokens": sum(r["tokens"] for r in rows),
+                  "cost_usd": round(sum(r["cost_usd"] for r in rows), 4)},
+        "daily_limit": quota.limit_for(request),
+        "note": "cost is an estimate; the provider's console shows what is billed",
+    }
 
 
 @app.get("/health")

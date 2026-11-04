@@ -172,9 +172,43 @@ Cost bounds on those routes, all set in `.env`:
 | `LLM_TIMEOUT_S` | 60 | one provider call is abandoned (2 retries) |
 | `DAILY_TOKEN_QUOTA` | 2000000 | 429 until 00:00 UTC; stored in Neo4j, survives restarts |
 
+Per-user daily limits override `DAILY_TOKEN_QUOTA`. Set them by login email or
+subject; they take effect on that user's next request, with no restart:
+
+```bash
+docker compose run --rm api python -m quota set alice@example.com 5000000   # tokens/day
+docker compose run --rm api python -m quota set ci-bot 0                    # unlimited
+docker compose run --rm api python -m quota clear alice@example.com         # back to default
+docker compose run --rm api python -m quota list                            # limits + today's usage
+```
+
+There is deliberately no HTTP route for this: the API has no admin role, so a
+route would let any user raise their own limit.
+
+Tokens and estimated cost per user (stored in Neo4j, one row per user per day):
+
+```bash
+docker compose run --rm api python -m quota report                           # all users, last 30 days
+docker compose run --rm api python -m quota report --days 7 --user alice@example.com   # one user, by day
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8000/me/usage | jq        # a user's OWN usage
+```
+
+Cost is an estimate (tokens × prices in `telemetry.py`, overridable with
+`TELEMETRY_PRICING`); the provider's console is what you are billed. Index-time
+summary costs are not charged to any user; they show in `/usage`.
+
 Every response from `/ask` includes `usage` (tokens spent) and `stopped` (`null`,
 `"token budget"` or `"time limit"`). Today's usage per user:
 `MATCH (q:UsageQuota) RETURN q.user, q.day, q.tokens ORDER BY q.tokens DESC`.
+
+**ML guardrails** (`api/guard.py`, LLM Guard, runs locally in the api container).
+A prompt-injection classifier checks every symbol's source at index time, the
+summarizer's output, each tool result before the agent sees it, and the agent's
+final answer. detect-secrets masks secrets in everything sent to the LLM,
+alongside our own patterns. `GUARD_MODE=required` (the image default) refuses to
+start without it; `GUARD_MODE=off` is for local development only. The model is
+baked into the image and the container never contacts Hugging Face at runtime.
+Cost: about 250 ms of CPU per symbol at index time, and the image is about 4.4 GB.
 
 `POST /ask {"question": "...", "repo": "YourApp"}` binds every graph tool to that
 repo on the server, so code in one repo cannot steer the agent into reading

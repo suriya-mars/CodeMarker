@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 
+import guard
 import llm
 import untrusted
 from parsing import Symbol
@@ -70,7 +71,11 @@ def suspicious(source: str) -> bool:
         return False
     if untrusted.has_smuggling(source):
         return True
-    return any(_AI_DIRECTED.search(t) for t in [source, *untrusted.hidden_texts(source)])
+    texts = [source, *untrusted.hidden_texts(source)]
+    if any(_AI_DIRECTED.search(t) for t in texts):
+        return True
+    # ML classifier: catches paraphrase and scrambled spellings the patterns miss
+    return any(guard.is_injection(t) for t in texts)
 
 
 def clean_summary(text: str | None, *, source: str = "") -> str | None:
@@ -88,7 +93,7 @@ def clean_summary(text: str | None, *, source: str = "") -> str | None:
         return None
     if len(line) > _MAX_SUMMARY_CHARS:
         line = line[:_MAX_SUMMARY_CHARS].rsplit(" ", 1)[0] + "…"
-    if _AI_DIRECTED.search(line):
+    if _AI_DIRECTED.search(line) or guard.is_injection(line):
         return FLAG  # the output itself is an instruction: keep none of it
     if suspicious(source):
         return f"{FLAG} {line}"

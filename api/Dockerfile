@@ -7,8 +7,22 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-guard.txt ./
+# One resolver run, so llm-guard's exact pins are checked against ours. CPU-only
+# PyTorch: the default wheel bundles CUDA and adds gigabytes for nothing here.
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+        -r requirements.txt -r requirements-guard.txt
+
+# Bake the guardrail model weights into the image, before the app code, so a
+# code change does not re-download them. At runtime the container is OFFLINE
+# for Hugging Face: no model fetches, no telemetry — customer source is scanned
+# locally and nothing about it leaves.
+ENV HF_HOME=/opt/hf HF_HUB_DISABLE_TELEMETRY=1
+RUN python -c "from llm_guard.input_scanners import PromptInjection, Secrets; \
+from llm_guard.input_scanners.prompt_injection import MatchType; \
+PromptInjection(threshold=0.99, match_type=MatchType.CHUNKS); Secrets()" \
+    && chmod -R a+rX /opt/hf
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 GUARD_MODE=required
 
 COPY . .
 

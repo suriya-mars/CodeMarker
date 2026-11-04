@@ -77,7 +77,8 @@ def _client(monkeypatch, **env):
 def test_overlong_question_is_rejected_before_any_work(monkeypatch):
     called = []
     monkeypatch.setattr(agent, "ask", lambda *a, **k: called.append(1) or {})
-    c = _client(monkeypatch, MAX_QUESTION_CHARS="100", DAILY_TOKEN_QUOTA="0")
+    monkeypatch.setattr(quota, "limit_for", lambda request: 0)
+    c = _client(monkeypatch, MAX_QUESTION_CHARS="100")
     assert c.post("/ask", json={"question": "x" * 101}).status_code == 422
     assert c.post("/impact/r1/ask", json={"question": "x" * 101}).status_code == 422
     assert called == []
@@ -88,6 +89,7 @@ def test_daily_quota_blocks_and_charges(monkeypatch):
     auth._calls.clear()
     spent = {}
     monkeypatch.setattr(quota, "used", lambda user: spent.get(user, 0))
+    monkeypatch.setattr(quota, "limit_for", lambda request: quota.daily_limit())
     monkeypatch.setattr(graph, "_run", lambda q, **p: spent.__setitem__(
         p["user"], spent.get(p["user"], 0) + p["tokens"]) or [])
     monkeypatch.setattr(graph, "get_profile", lambda: {})
@@ -127,4 +129,107 @@ def test_quota_persists_in_the_graph(monkeypatch):
         assert quota.used("bob") == 0  # per user
     finally:
         graph._run("MATCH (q:UsageQuota) DELETE q")
+        graph.close_driver()
+
+
+@pytest.mark.skipif(not (URI and PASSWORD), reason="no Neo4j at NEO4J_TEST_URI")
+def test_per_user_overrides(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("NEO4J_URI", URI)
+    monkeypatch.setenv("NEO4J_PASSWORD", PASSWORD)
+    monkeypatch.setenv("DAILY_TOKEN_QUOTA", "1000")
+    graph.close_driver()
+    graph.setup_schema()
+    graph._run("MATCH (q:UsageQuota|UserQuota) DELETE q")
+
+    def req(sub, email=None):
+        user = {"sub": sub} | ({"email": email} if email else {})
+        return SimpleNamespace(state=SimpleNamespace(user=user), client=None)
+
+    alice = req("uuid-alice", "Alice@Example.com")
+    try:
+        assert quota.limit_for(alice) == 1000                 # no override: default
+        quota.set_override("alice@example.com", 5000)          # set by email, any case
+        assert quota.limit_for(alice) == 5000
+        quota.set_override("uuid-alice", 7000)                 # subject beats email
+        assert quota.limit_for(alice) == 7000
+        assert quota.limit_for(req("uuid-bob")) == 1000        # others unaffected
+
+        quota.charge(alice, {"input_tokens": 6000, "output_tokens": 0})
+        quota.guard(alice)                                     # 6000 < 7000: allowed
+        quota.set_override("uuid-alice", 0)                    # 0 = unlimited
+        quota.charge(alice, {"input_tokens": 50_000, "output_tokens": 0})
+        quota.guard(alice)
+
+        assert quota.clear_override("uuid-alice") == 1
+        assert quota.limit_for(alice) == 5000                  # email override remains
+        rows = {r["user"]: r for r in quota.overview()}
+        assert rows["uuid-alice"]["used_today"] == 56_000
+        assert rows["alice@example.com"]["cap"] == 5000
+    finally:
+        graph._run("MATCH (q:UsageQuota|UserQuota) DELETE q")
+        graph.close_driver()
+
+
+# --- per-user usage and cost ---------------------------------------------------
+
+
+def test_agent_totals_cost_per_model(monkeypatch):
+    turns = iter([
+        llm.LLMResponse([{"type": "tool_use", "id": "t1", "name": "find_symbol",
+                          "input": {"query": "x"}}], "tool_use", 1000, 100,
+                        model="claude-sonnet-4-6", cost_usd=0.0045),
+        llm.LLMResponse([{"type": "text", "text": "done"}], "end_turn", 2000, 300,
+                        model="claude-sonnet-4-6", cost_usd=0.0105),
+    ])
+    monkeypatch.setattr(llm, "create_message", lambda **k: next(turns))
+    monkeypatch.setattr(tools, "run_tool", lambda n, i: [])
+    u = agent.ask("q")["usage"]
+    assert (u["input_tokens"], u["output_tokens"]) == (3000, 400)
+    assert u["cost_usd"] == pytest.approx(0.015)
+    assert u["by_model"] == {"claude-sonnet-4-6": {"input_tokens": 3000, "output_tokens": 400}}
+
+
+def test_cost_is_priced_from_the_model_that_actually_ran():
+    import telemetry
+
+    assert telemetry.cost_of("claude-sonnet-4-6", 1_000_000, 0) > 0
+
+
+@pytest.mark.skipif(not (URI and PASSWORD), reason="no Neo4j at NEO4J_TEST_URI")
+def test_usage_report_and_me_endpoint_show_only_your_own(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("NEO4J_URI", URI)
+    monkeypatch.setenv("NEO4J_PASSWORD", PASSWORD)
+    graph.close_driver()
+    graph.setup_schema()
+    graph._run("MATCH (q:UsageQuota|UserQuota) DELETE q")
+
+    def req(sub, email=None):
+        user = {"sub": sub} | ({"email": email} if email else {})
+        return SimpleNamespace(state=SimpleNamespace(user=user), client=None)
+
+    try:
+        quota.charge(req("local"), {"input_tokens": 1000, "output_tokens": 200, "cost_usd": 0.006})
+        quota.charge(req("local"), {"input_tokens": 3000, "output_tokens": 800, "cost_usd": 0.021})
+        quota.charge(req("uuid-bob", "Bob@Example.com"),
+                     {"input_tokens": 50_000, "output_tokens": 0, "cost_usd": 0.15})
+
+        rows = quota.usage_report(30)
+        by = {t["user"]: t for t in quota.totals(rows)}
+        assert by["local"]["questions"] == 2 and by["local"]["tokens"] == 5000
+        assert by["local"]["cost_usd"] == pytest.approx(0.027)
+        assert by["uuid-bob"]["email"] == "bob@example.com"
+        assert quota.totals(rows)[0]["user"] == "uuid-bob"  # most expensive first
+        assert len(quota.usage_report(30, "BOB@example.com")) == 1  # by email, any case
+
+        monkeypatch.setattr(quota, "limit_for", lambda request: 0)
+        me = _client(monkeypatch).get("/me/usage").json()  # AUTH_MODE=none -> "local"
+        assert me["user"] == "local"
+        assert me["total"] == {"questions": 2, "tokens": 5000, "cost_usd": 0.027}
+        assert all(d["user"] == "local" for d in me["days"])  # never Bob's rows
+    finally:
+        graph._run("MATCH (q:UsageQuota|UserQuota) DELETE q")
         graph.close_driver()

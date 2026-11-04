@@ -49,6 +49,9 @@ services:
       AGENT_TIMEOUT_S: "${AGENT_TIMEOUT_S:-120}"            # per question, wall clock
       LLM_TIMEOUT_S: "${LLM_TIMEOUT_S:-60}"                 # per provider call
       MAX_QUESTION_CHARS: "${MAX_QUESTION_CHARS:-4000}"
+      # guard.py: local ML guardrails (LLM Guard). required = refuse to start without them.
+      GUARD_MODE: "${GUARD_MODE:-required}"
+      GUARD_THRESHOLD: "${GUARD_THRESHOLD:-0.99}"
       REPOS_ROOT: "/repos"
     volumes:
       - ./api:/app
