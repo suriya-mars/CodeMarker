@@ -405,6 +405,40 @@ def _effort_hint(reach: int, blockers: int, dependents: int) -> str:
     return "large — consider splitting; many dependents or heavy legacy API use"
 
 
+# --- Not a tool: connects an answer's citations for the graph view ----------
+
+_MAX_CONNECTED = 8  # pairs grow quadratically: 8 ids is 28 shortest-path searches
+
+
+def connect(ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """The real paths joining cited symbols, so the UI lights a path rather than
+    scattered dots. Deterministic: the shortest parsed-edge route between each pair,
+    up to 3 hops and in either direction. CONTAINS counts, so two symbols in one
+    file are joined through that file. Pairs with no such route stay unconnected;
+    nothing is inferred to bridge them."""
+    ids = list(ids)[:_MAX_CONNECTED]
+    if len(ids) < 2:
+        return {"nodes": [], "edges": []}
+    rows = graph._run(
+        f"""
+        UNWIND $ids AS x
+        UNWIND $ids AS y
+        WITH x, y WHERE x < y
+        MATCH (a:Symbol {{id: x}}), (b:Symbol {{id: y}})
+        WHERE {_in("a")} AND {_in("b")}
+        MATCH p = shortestPath((a)-[:CALLS|CONTAINS|INHERITS|IMPORTS|HANDLES|TRIGGERS|EXECUTES*..3]-(b))
+        RETURN [n IN nodes(p) | {{id: n.id, name: n.name, kind: n.kind}}] AS nodes,
+               [r IN relationships(p) | {{source: startNode(r).id, target: endNode(r).id,
+                                         type: type(r)}}] AS edges
+        """,
+        ids=ids,
+        repo=_repo(),
+    )
+    nodes = {n["id"]: n for row in rows for n in row["nodes"]}
+    edges = {(e["source"], e["target"], e["type"]): e for row in rows for e in row["edges"]}
+    return {"nodes": list(nodes.values()), "edges": list(edges.values())}
+
+
 # --- Tool schemas (Anthropic tool-use format) -------------------------------
 
 TOOLS: list[dict[str, Any]] = [

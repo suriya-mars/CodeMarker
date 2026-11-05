@@ -8,7 +8,7 @@ architecture decisions that are **intentional** — do not "improve" them away
 
 ## 1. What we are building
 
-**Codebase Explorer** — a tool that makes an unfamiliar codebase understandable at
+**RepoDigger** — a tool that makes an unfamiliar codebase understandable at
 a glance. You point it at a repo; it builds a graph of every file, class, and
 function and the relationships between them (imports, calls, inheritance), then
 lets a user ask questions in plain English ("how does authentication work?") and
@@ -186,7 +186,7 @@ ruff
 ## 7. Repository structure
 
 ```
-codebase-explorer/
+CodeMarker/                   # the repo folder keeps its old name; the product is RepoDigger
 ├── docker-compose.yml
 ├── .env                      # API keys + provider switch (gitignored)
 ├── .env.example              # committed template

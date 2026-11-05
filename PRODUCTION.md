@@ -1,6 +1,6 @@
 # PRODUCTION.md
 
-Production readiness assessment for **Codebase Explorer**, and the work required to
+Production readiness assessment for **RepoDigger**, and the work required to
 get from the current state to something that can be run for real users.
 
 Assessed at: 2026-08-24 · Codebase: 2,152 LOC (9 backend modules, 3 test files,

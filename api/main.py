@@ -29,7 +29,7 @@ auth.check_config()  # fail at boot on a bad AUTH_MODE, never per request
 guard.check_config()  # likewise: never silently run without the ML guardrails
 guard.preload()
 # Every route requires a user; auth.require_user exempts only /health.
-app = FastAPI(title="Codebase Explorer", dependencies=[Depends(auth.require_user)])
+app = FastAPI(title="RepoDigger", dependencies=[Depends(auth.require_user)])
 
 # The web UI reaches the API same-origin (nginx proxies /api/ -> api:8000), so a
 # browser needs NO cross-origin access. CORS is therefore off unless origins are
@@ -162,7 +162,12 @@ def ask(req: AskRequest, request: Request) -> dict[str, Any]:
     prof = graph.get_profile()
     with tools.scoped(req.repo):
         result = agent.ask(req.question, max_steps=prof.get("max_agent_steps"))
-    quota.charge(request, result.get("usage"))
+        quota.charge(request, result.get("usage"))
+        try:
+            result["path"] = tools.connect(result.get("cited_ids") or [])
+        except Exception as exc:  # noqa: BLE001 — a paid-for answer outlives a failed highlight
+            print(f"[ask] could not connect cited symbols: {exc}")
+            result["path"] = {"nodes": [], "edges": []}
     return result
 
 
@@ -209,37 +214,89 @@ def impact_ask(report_id: str, req: ImpactAskRequest, request: Request) -> dict[
     return result
 
 
+# What "Open code" serves: classes and functions, never whole files.
+_CODE_KINDS = ["class", "interface", "function", "method"]
+_MAX_CODE_CHARS = 200_000  # a generated class must not stall the browser
+
+
+@app.get("/symbol/source")
+def symbol_source(id: str, repo: str = "") -> dict[str, Any]:
+    """One symbol's stored source, for the web UI's code viewer. Read from the graph:
+    no LLM call and no cost. The id is a query parameter because ids contain `/` and
+    `::`, and is always passed to Cypher as a parameter."""
+    if repo and not _REPO_NAME.match(repo):
+        raise HTTPException(status_code=400, detail="repo must be a plain directory name")
+    rows = graph._run(
+        """
+        MATCH (s:Symbol {id: $id})
+        WHERE s.kind IN $kinds AND ($repo = '' OR s.repo = $repo)
+        RETURN s.id AS id, s.name AS name, s.kind AS kind, s.path AS path,
+               s.language AS language, s.start_line AS start_line,
+               s.end_line AS end_line, s.source AS source
+        """,
+        id=id,
+        kinds=_CODE_KINDS,
+        repo=repo,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No class or function with that id")
+    row = rows[0]
+    source = row["source"] or ""
+    row["truncated"] = len(source) > _MAX_CODE_CHARS
+    row["source"] = source[:_MAX_CODE_CHARS]
+    return row
+
+
+@app.get("/repos")
+def list_repos() -> list[dict[str, Any]]:
+    """The indexed repos, for the web UI's repo scope."""
+    return graph._run(
+        """
+        MATCH (s:Symbol) WHERE s.repo IS NOT NULL
+        RETURN s.repo AS repo, count(*) AS symbols ORDER BY repo
+        """
+    )
+
+
 @app.get("/graph")
-def get_graph(limit: int | None = None) -> dict[str, list[dict[str, Any]]]:
+def get_graph(limit: int | None = None, repo: str = "") -> dict[str, list[dict[str, Any]]]:
     """Return the Symbol graph for visualization: nodes + edges in a Cytoscape-
-    friendly shape. CALLS/IMPORTS/INHERITS edges only (CONTAINS is implied by the
-    id hierarchy and would clutter the overview).
+    friendly shape, optionally for one repo. CONTAINS is included so a function
+    sits next to its file instead of floating unconnected; the UI draws it faintly.
 
     The node cap comes from the repo's scale profile — you cannot draw 150,000
     nodes, so a large repo returns the highest-degree subgraph and the UI is
-    expected to drill in by community from there."""
+    expected to drill in by community from there. Edges are taken only among the
+    returned nodes, with real dependencies ahead of CONTAINS if the edge cap bites."""
+    if repo and not _REPO_NAME.match(repo):
+        raise HTTPException(status_code=400, detail="repo must be a plain directory name")
     prof = graph.get_profile()
     if limit is None:
         limit = prof.get("graph_render_limit", 1500)
+    limit = max(1, min(int(limit), 5000))
     nodes = graph._run(
         """
-        MATCH (s:Symbol)
+        MATCH (s:Symbol) WHERE $repo = '' OR s.repo = $repo
         OPTIONAL MATCH (s)-[c:CALLS]-()
         WITH s, count(c) AS degree
         RETURN s.id AS id, s.name AS name, s.kind AS kind, s.path AS path,
                s.summary AS summary, s.community_id AS community_id, degree
-        ORDER BY degree DESC
+        ORDER BY degree DESC, id
         LIMIT $limit
         """,
-        limit=int(limit),
+        repo=repo,
+        limit=limit,
     )
     edges = graph._run(
         """
-        MATCH (a:Symbol)-[r:CALLS|IMPORTS|INHERITS]->(b:Symbol)
+        MATCH (a:Symbol)-[r:CALLS|IMPORTS|INHERITS|CONTAINS|HANDLES|TRIGGERS|EXECUTES]->(b:Symbol)
+        WHERE a.id IN $ids AND b.id IN $ids
         RETURN a.id AS source, b.id AS target, type(r) AS type,
                coalesce(r.count, 1) AS count
+        ORDER BY type = 'CONTAINS', source, target
         LIMIT $limit
         """,
-        limit=int(limit) * 3,
+        ids=[n["id"] for n in nodes],
+        limit=limit * 5,
     )
     return {"nodes": nodes, "edges": edges}

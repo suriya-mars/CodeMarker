@@ -90,3 +90,21 @@ def test_unknown_tool_returns_error_block(monkeypatch):
     assert err_block["type"] == "tool_result"
     assert err_block.get("is_error") is True
     assert err_block["tool_use_id"] == "tu_x"
+
+
+def test_cited_ids_match_whole_tokens_and_resolve_unambiguous_names():
+    seen = {"auth", "auth.AuthService.login", "src.base.Selection", "a.main", "b.main"}
+    answer = (
+        "Authentication starts in auth.AuthService.login. Results land in `Selection`; "
+        "see `main` for setup.\n```python\nSelection()\n```"
+    )
+    # "auth" is not cited by "Authentication"; `main` has two candidates, so it is dropped
+    assert agent.cited_ids(answer, seen) == ["auth.AuthService.login", "src.base.Selection"]
+    assert agent.cited_ids("`base.Selection` then `login()`", seen) == [
+        "auth.AuthService.login", "src.base.Selection",
+    ]
+    assert agent.cited_ids("the `auth` module", seen) == ["auth"]
+    assert agent.cited_ids("`src/base.py` and `Nonexistent`", seen) == []
+    assert agent.cited_ids("Sentence ends at auth.AuthService.login.", seen) == [
+        "auth.AuthService.login",
+    ]

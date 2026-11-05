@@ -86,7 +86,15 @@ docker compose up -d
 curl -s localhost:8000/health
 ```
 
-**Ask a question.** `repo` binds the agent's tools to that repo.
+**List indexed repos, or fetch one repo's graph**
+
+```bash
+curl -s localhost:8000/repos | jq
+curl -s 'localhost:8000/graph?repo=myrepo' | jq '.nodes | length'
+```
+
+**Ask a question.** `repo` binds the agent's tools to that repo; the web UI always sends
+it. The response's `path` holds the real graph route joining the cited symbols.
 
 ```bash
 curl -s localhost:8000/ask -H 'Content-Type: application/json' \
@@ -231,13 +239,15 @@ Stop the main stack first if it is running; both use the same ports.
 | `/ask` | An answer, `cited_ids`, `usage` with `cost_usd`, `stopped: null` |
 | `/impact` after a signature change | A `SIGNATURE_CHANGED_CALLERS_UNTOUCHED` flag listing the callers |
 | `/me/usage` | Your questions, tokens and cost for today |
-| Web UI | The graph renders; asking a question highlights the cited symbols |
+| Web UI | One repo's graph renders; a question lights the cited symbols and the path joining them; the answer shows formatted, with images removed and links as plain text |
 
 Known issues seen in testing:
 
-- **Weak citations with `gpt-4o-mini`.** It tends to cite file ids (`auth`)
-  instead of exact symbol ids (`auth.AuthService.login`), so less of the path
-  lights up. A stronger model cites more precisely.
+- **Citations still depend on the model.** `gpt-4o-mini` often writes short names; they
+  are resolved when exactly one symbol the agent saw matches, and dropped when ambiguous
+  (`main`), so a stronger model lights up more of the path.
+- **Not every cited symbol connects.** The path uses real edges within 3 hops. A cited
+  symbol with no such route lights up alone; nothing is invented to bridge it.
 - **Occasional false guardrail flags on very short functions.** About 1 in 100
   functions, more often on two-line ones. The summary gets a `[flagged: …]`
   prefix; the symbol is still indexed and searchable.

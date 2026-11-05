@@ -1,0 +1,201 @@
+{
+ "title": "Choose the concept for the new RepoDigger view",
+ "question": "Your palettes are fixed in every option: Black/Blue/Cyan, Blue/White/Pink, and more, switchable live. This picks the idea underneath them. The roll assigned Core Log; keep it, take an alternate, or re-roll.",
+ "options": [
+  {
+   "id": "assigned",
+   "kind": "assigned",
+   "label": "Core Log",
+   "kicker": "THE ROLL",
+   "lineage": "geological borehole logs",
+   "thesis": "Each answer is drilled through the code and shown as a core: symbols stacked by depth, beside the graph they came from. Ships with your Black/Blue/Cyan and Blue/White/Pink themes plus more, switchable live.",
+   "palette": [
+    "#050a12",
+    "#1e7fff",
+    "#35d6e6",
+    "#d7e6f2"
+   ],
+   "materials": [
+    "hatched strata bands",
+    "tabular depth numerals"
+   ],
+   "viewport": "Three standard panels: graph, the answer's core log, and chat. The lit path is drawn as a vertical drill line.",
+   "risk": "Adds a third column, so the graph gets narrower. The core metaphor leans on the product's name.",
+   "raised": [
+    {
+     "from": "challenger-acetate",
+     "raise": "Rank comes from one system only: depth in the log, never mixed shadows and borders."
+    },
+    {
+     "from": "challenger-ikeda",
+     "raise": "Numbers run in tight tabular columns: hops, tokens, time, cost."
+    },
+    {
+     "from": "challenger-jcard",
+     "raise": "Every answer states what it spent, right-aligned, like a running time."
+    }
+   ],
+   "html": ".impeccable/mocks/decision/assigned.html"
+  },
+  {
+   "id": "model-pick",
+   "kind": "pick",
+   "label": "Star Atlas",
+   "kicker": "IMPECCABLE\u2019S PICK",
+   "lineage": "celestial atlases and planetarium charts",
+   "thesis": "Symbols are stars and Leiden communities are named constellations. Each answer joins its stars into a constellation. Ships with your Black/Blue/Cyan and Blue/White/Pink themes plus more, switchable live.",
+   "palette": [
+    "#040813",
+    "#22c7dd",
+    "#7df3ff",
+    "#dce9fb"
+   ],
+   "materials": [
+    "star field",
+    "dashed constellation bounds"
+   ],
+   "viewport": "The graph owns the screen, communities labelled by name, the lit path as bright lines; chat docked right.",
+   "risk": "The most familiar pick here: a dark starry graph is a look many developer tools already wear. Dense repos could read as noise.",
+   "html": ".impeccable/mocks/decision/pick.html"
+  },
+  {
+   "id": "challenger-course",
+   "kind": "challenger",
+   "catalogId": "notation-diagram-systems-orienteering-map",
+   "label": "Course Map",
+   "verdict": "competitive",
+   "lineage": "orienteering maps",
+   "thesis": "Parsed code is the terrain and never changes; the answer is a numbered course ridden on top. It makes 'facts first, narrative second' literal. Ships with your Black/Blue/Cyan and Blue/White/Pink themes plus more, switchable live.",
+   "palette": [
+    "#ffffff",
+    "#1747c8",
+    "#d6337f",
+    "#fdf1f6"
+   ],
+   "materials": [
+    "numbered control circles",
+    "ranked control table"
+   ],
+   "viewport": "Graph as a quiet map, numbered circles for the answer's path, and a control table under the answer listing each step and how it was reached.",
+   "case": "Fuses well: ordered steps and an honest 'no route' row beat the core log on clarity, but engineers don't know this world by heart.",
+   "risk": "Numbering implies an order, and cited symbols don't always have one.",
+   "html": ".impeccable/mocks/decision/course.html"
+  },
+  {
+   "id": "challenger-metro",
+   "kind": "challenger",
+   "catalogId": "digital-design-canon-metro-typographic-tiles",
+   "label": "Live Tiles",
+   "verdict": "competitive",
+   "lineage": "Metro typographic design",
+   "thesis": "Flat colour and huge lowercase, no chrome. Your black and cyan at full commitment, with code areas as words and symbols as tiles. Ships with your Black/Blue/Cyan and Blue/White/Pink themes plus more, switchable live.",
+   "palette": [
+    "#000000",
+    "#0a5bd3",
+    "#00b8d9",
+    "#ffffff"
+   ],
+   "materials": [
+    "flat tiles",
+    "giant light type"
+   ],
+   "viewport": "Communities as a giant cropped word, symbols as tiles, the path as flooded tiles; chat on the right.",
+   "case": "The most striking fit for 'modern', but tiles replace the graph picture, and the graph is what the product is for.",
+   "risk": "Loses the node-and-edge view that shows relationships. It may need a graph toggle.",
+   "html": ".impeccable/mocks/decision/metro.html"
+  },
+  {
+   "id": "challenger-acetate",
+   "kind": "challenger",
+   "catalogId": "rw-manual-acetate-tab-board",
+   "label": "Acetate Manual",
+   "verdict": "declined",
+   "lineage": "boxed-software reference manuals",
+   "palette": [
+    "#e8e4d8",
+    "#e8590c"
+   ],
+   "materials": [
+    "acetate leaves"
+   ],
+   "case": "Engineers read graphs here, not manuals, and its board colours fight your palettes.",
+   "kept": "Rank comes from one system only."
+  },
+  {
+   "id": "challenger-ikeda",
+   "kind": "challenger",
+   "catalogId": "ikeda-datamatics",
+   "label": "Data Field",
+   "verdict": "declined",
+   "lineage": "data-sublime installations",
+   "palette": [
+    "#000000",
+    "#ffffff"
+   ],
+   "materials": [
+    "barcode fields"
+   ],
+   "case": "Pure black and white conflicts with the colours you asked for.",
+   "kept": "Tight tabular numerics."
+  },
+  {
+   "id": "challenger-jcard",
+   "kind": "challenger",
+   "catalogId": "vernacular-ephemera-cassette-j-card",
+   "label": "Mixtape J-Card",
+   "verdict": "declined",
+   "lineage": "cassette inlays",
+   "palette": [
+    "#ffffff",
+    "#1a3fb0"
+   ],
+   "materials": [
+    "ballpoint on lined card"
+   ],
+   "case": "Charming, but handwriting costs trust for a tool reporting facts.",
+   "kept": "Right-aligned running totals."
+  },
+  {
+   "id": "challenger-feed",
+   "kind": "challenger",
+   "catalogId": "pop-culture-shelf-vertical-video-feed-surface",
+   "label": "Vertical Feed",
+   "verdict": "declined",
+   "lineage": "short-video feeds",
+   "palette": [
+    "#000000",
+    "#ffffff"
+   ],
+   "materials": [
+    "full-bleed media"
+   ],
+   "case": "One item at a time removes the overview that makes a graph useful.",
+   "kept": "Nothing beyond its focus."
+  }
+ ],
+ "reroll": {
+  "registers": [
+   "safer",
+   "bolder"
+  ]
+ },
+ "canon": true,
+ "canonCard": {
+  "kind": "canon",
+  "label": "The category standard",
+  "thesis": "A polished dark developer tool: side navigation, graph, chat, done to the standard of the best products in this category.",
+  "palette": [
+   "#0b0d12",
+   "#1b2030",
+   "#3b82f6"
+  ],
+  "materials": [
+   "clean grid",
+   "hairline borders"
+  ],
+  "viewport": "Left navigation, graph in the centre, chat on the right.",
+  "risk": "Looks like its neighbours, by design.",
+  "html": ".impeccable/mocks/decision/canon.html"
+ },
+ "steer": true
+}

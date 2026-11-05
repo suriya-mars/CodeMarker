@@ -1,6 +1,6 @@
 # RUNBOOK
 
-Operational commands for Codebase Explorer. Design rationale lives in
+Operational commands for RepoDigger. Design rationale lives in
 [CLAUDE.md](CLAUDE.md); readiness gaps in [PRODUCTION.md](PRODUCTION.md); the
 .NET/WebForms plan in [PRODUCTION-DOTNET.md](PRODUCTION-DOTNET.md).
 

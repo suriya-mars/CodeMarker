@@ -1,0 +1,900 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-05T04:18:57+00:00",
+  "title": "Design System: RepoDigger",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Core Black",
+        "canonical": "#050a12",
+        "tonalRamp": [
+          "#070b11",
+          "#1f262e",
+          "#3b434d",
+          "#5a626d",
+          "#7b838f",
+          "#9da6b2",
+          "#c2cad5",
+          "#e8eff8"
+        ]
+      },
+      "s1": {
+        "role": "neutral",
+        "displayName": "Log Surface",
+        "canonical": "#08121f",
+        "tonalRamp": [
+          "#060b14",
+          "#1c2632",
+          "#374352",
+          "#566273",
+          "#768495",
+          "#98a6b9",
+          "#becadb",
+          "#e5f0fd"
+        ]
+      },
+      "s2": {
+        "role": "neutral",
+        "displayName": "Panel Surface",
+        "canonical": "#0a1626",
+        "tonalRamp": [
+          "#050b16",
+          "#1b2635",
+          "#354356",
+          "#546276",
+          "#748499",
+          "#96a6bc",
+          "#bccbde",
+          "#e5f0fe"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised Slate",
+        "canonical": "#0e1f33",
+        "tonalRamp": [
+          "#030c18",
+          "#172638",
+          "#31435a",
+          "#4f637b",
+          "#70849d",
+          "#92a7c1",
+          "#b8cbe3",
+          "#e4f0fe"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Strata Line",
+        "canonical": "#1a3550",
+        "tonalRamp": [
+          "#000c1c",
+          "#10263d",
+          "#294460",
+          "#476482",
+          "#6885a5",
+          "#8aa8c9",
+          "#b1ccea",
+          "#e3f0ff"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Ice Text",
+        "canonical": "#d7e6f2",
+        "tonalRamp": [
+          "#060c11",
+          "#1d262e",
+          "#37444d",
+          "#56636d",
+          "#77848f",
+          "#99a7b2",
+          "#becbd5",
+          "#e6f0f9"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Steel",
+        "canonical": "#8fb0c8",
+        "tonalRamp": [
+          "#000d18",
+          "#0f2838",
+          "#28465a",
+          "#47657b",
+          "#67879e",
+          "#89aac2",
+          "#b0cee3",
+          "#e0f1fe"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Bore Blue",
+        "canonical": "#1069e0",
+        "tonalRamp": [
+          "#000923",
+          "#012253",
+          "#053d89",
+          "#005ac9",
+          "#2a7df6",
+          "#6aa5ff",
+          "#aacbfe",
+          "#e5effe"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Bore Blue Hover",
+        "canonical": "#0d5cc7",
+        "tonalRamp": [
+          "#000923",
+          "#012254",
+          "#043d8a",
+          "#0a5ac5",
+          "#357eec",
+          "#6da5fc",
+          "#a9cbfe",
+          "#e5efff"
+        ]
+      },
+      "on-accent": {
+        "role": "primary",
+        "displayName": "On Bore Blue",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "live": {
+        "role": "secondary",
+        "displayName": "Live Cyan",
+        "canonical": "#35d6e6",
+        "tonalRamp": [
+          "#000e10",
+          "#012b2f",
+          "#074b52",
+          "#106e77",
+          "#0194a0",
+          "#13bac9",
+          "#62deec",
+          "#c8f9ff"
+        ]
+      },
+      "via": {
+        "role": "secondary",
+        "displayName": "Route Steel",
+        "canonical": "#7fa8cc",
+        "tonalRamp": [
+          "#000c1a",
+          "#052740",
+          "#1f4564",
+          "#3e6586",
+          "#5f87a9",
+          "#81aace",
+          "#a9ceef",
+          "#e1f1ff"
+        ]
+      },
+      "code": {
+        "role": "secondary",
+        "displayName": "Code Cyan",
+        "canonical": "#5fe3f0",
+        "tonalRamp": [
+          "#000e10",
+          "#012b2f",
+          "#054b51",
+          "#0e6e76",
+          "#17939e",
+          "#27bac6",
+          "#70dce8",
+          "#c7f9fe"
+        ]
+      },
+      "code-bg": {
+        "role": "secondary",
+        "displayName": "Code Tint",
+        "canonical": "#12283f",
+        "tonalRamp": [
+          "#020c1a",
+          "#14263a",
+          "#2d445d",
+          "#4b647e",
+          "#6c85a1",
+          "#8ea8c5",
+          "#b4cce6",
+          "#e3f0ff"
+        ]
+      },
+      "pre-bg": {
+        "role": "neutral",
+        "displayName": "Code Block Ground",
+        "canonical": "#030710",
+        "tonalRamp": [
+          "#070b12",
+          "#1f252f",
+          "#3a434f",
+          "#59626f",
+          "#7a8391",
+          "#9ca6b4",
+          "#c1cad7",
+          "#e8effa"
+        ]
+      },
+      "pre-text": {
+        "role": "neutral",
+        "displayName": "Code Block Text",
+        "canonical": "#d7e6f2",
+        "tonalRamp": [
+          "#060c11",
+          "#1d262e",
+          "#37444d",
+          "#56636d",
+          "#77848f",
+          "#99a7b2",
+          "#becbd5",
+          "#e6f0f9"
+        ]
+      },
+      "danger-bg": {
+        "role": "neutral",
+        "displayName": "Danger Ground",
+        "canonical": "#3a1216",
+        "tonalRamp": [
+          "#1a0305",
+          "#3c191b",
+          "#5f3336",
+          "#815254",
+          "#a57375",
+          "#ca9597",
+          "#ebbbbc",
+          "#fee8e9"
+        ]
+      },
+      "danger": {
+        "role": "neutral",
+        "displayName": "Danger Text",
+        "canonical": "#ffb4b4",
+        "tonalRamp": [
+          "#1f0003",
+          "#431116",
+          "#692c2f",
+          "#8c4b4d",
+          "#b16c6d",
+          "#d78f8f",
+          "#f7b6b5",
+          "#ffe8e8"
+        ]
+      },
+      "warn": {
+        "role": "neutral",
+        "displayName": "Warn Text",
+        "canonical": "#ffd27a",
+        "tonalRamp": [
+          "#110a00",
+          "#312201",
+          "#553e06",
+          "#7d5b00",
+          "#a47b17",
+          "#c99e44",
+          "#eac379",
+          "#ffecca"
+        ]
+      },
+      "warn-bg": {
+        "role": "neutral",
+        "displayName": "Warn Ground",
+        "canonical": "#3a2a0c",
+        "tonalRamp": [
+          "#120900",
+          "#302209",
+          "#503f22",
+          "#705e40",
+          "#927f60",
+          "#b6a282",
+          "#d8c7aa",
+          "#fbedd5"
+        ]
+      },
+      "edge": {
+        "role": "neutral",
+        "displayName": "Dependency Edge",
+        "canonical": "#27486a",
+        "tonalRamp": [
+          "#000b1d",
+          "#0a2641",
+          "#234466",
+          "#426488",
+          "#6286ab",
+          "#84a9d0",
+          "#accdf0",
+          "#e3f0fe"
+        ]
+      },
+      "edge-soft": {
+        "role": "neutral",
+        "displayName": "Containment Edge",
+        "canonical": "#16293f",
+        "tonalRamp": [
+          "#030c19",
+          "#162639",
+          "#2f435b",
+          "#4e637c",
+          "#6e849f",
+          "#90a7c3",
+          "#b7cbe4",
+          "#e4f0fe"
+        ]
+      },
+      "dot": {
+        "role": "neutral",
+        "displayName": "Graph Dot Grid",
+        "canonical": "#10233a",
+        "tonalRamp": [
+          "#020b1a",
+          "#15263a",
+          "#2f435d",
+          "#4d637e",
+          "#6e84a1",
+          "#90a7c5",
+          "#b6cbe6",
+          "#e4f0fe"
+        ]
+      },
+      "k-file": {
+        "role": "tertiary",
+        "displayName": "File Kind",
+        "canonical": "#6f9bff",
+        "tonalRamp": [
+          "#000035",
+          "#041865",
+          "#173792",
+          "#345ab8",
+          "#537dde",
+          "#79a2fc",
+          "#afc9ff",
+          "#e7efff"
+        ]
+      },
+      "k-class": {
+        "role": "tertiary",
+        "displayName": "Class Kind",
+        "canonical": "#d8f1ff",
+        "tonalRamp": [
+          "#030d13",
+          "#162831",
+          "#304550",
+          "#4f6571",
+          "#6f8693",
+          "#92a9b6",
+          "#b8cdd9",
+          "#e0f2fb"
+        ]
+      },
+      "k-function": {
+        "role": "tertiary",
+        "displayName": "Function Kind",
+        "canonical": "#9db7d6",
+        "tonalRamp": [
+          "#020b1a",
+          "#14263b",
+          "#2d445e",
+          "#4c637f",
+          "#6c85a2",
+          "#8ea8c6",
+          "#b5cce7",
+          "#e4f0fe"
+        ]
+      },
+      "k-method": {
+        "role": "tertiary",
+        "displayName": "Method Kind",
+        "canonical": "#2f66ad",
+        "tonalRamp": [
+          "#000a21",
+          "#00234f",
+          "#024083",
+          "#2a61a8",
+          "#4c83cd",
+          "#6ea7f3",
+          "#a7ccfe",
+          "#e5f0ff"
+        ]
+      },
+      "k-page": {
+        "role": "tertiary",
+        "displayName": "Page Kind",
+        "canonical": "#b9c8ff",
+        "tonalRamp": [
+          "#050822",
+          "#1a2146",
+          "#343e6c",
+          "#525e8e",
+          "#727fb2",
+          "#94a2d7",
+          "#bac7f7",
+          "#e9eeff"
+        ]
+      },
+      "k-interface": {
+        "role": "tertiary",
+        "displayName": "Interface Kind",
+        "canonical": "#4fa8c9",
+        "tonalRamp": [
+          "#000d14",
+          "#022a37",
+          "#01495f",
+          "#046b89",
+          "#328eae",
+          "#59b2d3",
+          "#8bd5f3",
+          "#d9f4ff"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "Product name; largest type on screen."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "Log headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Questions and answers; the base size."
+      },
+      "summary": {
+        "displayName": "Summary",
+        "purpose": "LLM one-line summaries and text actions."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Relations, kind tags, paths, facts, provenance."
+      },
+      "symbol": {
+        "displayName": "Symbol",
+        "purpose": "Symbol names and full ids."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Inline code in answers."
+      },
+      "numeral": {
+        "displayName": "Numeral",
+        "purpose": "Depth numerals; tabular."
+      }
+    },
+    "themes": {
+      "deep-core": {
+        "colorScheme": "dark",
+        "tokens": {
+          "bg": "#050a12",
+          "s1": "#08121f",
+          "s2": "#0a1626",
+          "raised": "#0e1f33",
+          "line": "#1a3550",
+          "text": "#d7e6f2",
+          "muted": "#8fb0c8",
+          "accent": "#1069e0",
+          "accent-hover": "#0d5cc7",
+          "on-accent": "#ffffff",
+          "live": "#35d6e6",
+          "via": "#7fa8cc",
+          "code": "#5fe3f0",
+          "code-bg": "#12283f",
+          "pre-bg": "#030710",
+          "pre-text": "#d7e6f2",
+          "danger-bg": "#3a1216",
+          "danger": "#ffb4b4",
+          "warn": "#ffd27a",
+          "warn-bg": "#3a2a0c",
+          "edge": "#27486a",
+          "edge-soft": "#16293f",
+          "dot": "#10233a",
+          "k-file": "#6f9bff",
+          "k-class": "#d8f1ff",
+          "k-function": "#9db7d6",
+          "k-method": "#2f66ad",
+          "k-page": "#b9c8ff",
+          "k-interface": "#4fa8c9"
+        }
+      },
+      "blossom": {
+        "colorScheme": "light",
+        "tokens": {
+          "bg": "#ffffff",
+          "s1": "#ffeef5",
+          "s2": "#fff6fa",
+          "raised": "#ffffff",
+          "line": "#f7b6d2",
+          "text": "#10233f",
+          "muted": "#664d64",
+          "accent": "#1747c8",
+          "accent-hover": "#123aa6",
+          "on-accent": "#ffffff",
+          "live": "#1747c8",
+          "via": "#8fa9e8",
+          "code": "#1747c8",
+          "code-bg": "#fbd9e7",
+          "pre-bg": "#10233f",
+          "pre-text": "#eef3fb",
+          "danger-bg": "#fde3e3",
+          "danger": "#8f1d1d",
+          "warn": "#7a4a00",
+          "warn-bg": "#fff0d0",
+          "edge": "#c3d2ea",
+          "edge-soft": "#e3ecf8",
+          "dot": "#e9f0fb",
+          "k-file": "#8a8fa8",
+          "k-class": "#ee8fb7",
+          "k-function": "#a8bdf0",
+          "k-method": "#4a78dc",
+          "k-page": "#7c3aed",
+          "k-interface": "#0e9f9f"
+        }
+      },
+      "cobalt": {
+        "colorScheme": "dark",
+        "tokens": {
+          "bg": "#0a2472",
+          "s1": "#0c2c88",
+          "s2": "#0e3299",
+          "raised": "#123aa8",
+          "line": "#2a53c4",
+          "text": "#f3f7ff",
+          "muted": "#bccdf5",
+          "accent": "#ffffff",
+          "accent-hover": "#dbe6ff",
+          "on-accent": "#0a2472",
+          "live": "#7df3ff",
+          "via": "#b9d2ff",
+          "code": "#a8f6ff",
+          "code-bg": "#0a2472",
+          "pre-bg": "#071a55",
+          "pre-text": "#f3f7ff",
+          "danger-bg": "#5c1430",
+          "danger": "#ffc9d4",
+          "warn": "#ffe08a",
+          "warn-bg": "#4a3a0a",
+          "edge": "#4f74dc",
+          "edge-soft": "#22419f",
+          "dot": "#1a3a95",
+          "k-file": "#ffffff",
+          "k-class": "#c4d4ff",
+          "k-function": "#8fa8f0",
+          "k-method": "#5f86e8",
+          "k-page": "#ffc2e0",
+          "k-interface": "#b0f0d8"
+        }
+      },
+      "aurora": {
+        "colorScheme": "dark",
+        "tokens": {
+          "bg": "#06110f",
+          "s1": "#0a1a17",
+          "s2": "#0c211d",
+          "raised": "#123029",
+          "line": "#1f4239",
+          "text": "#d9efe8",
+          "muted": "#8fb8ac",
+          "accent": "#0b7f69",
+          "accent-hover": "#096b59",
+          "on-accent": "#ffffff",
+          "live": "#c58bff",
+          "via": "#7fd0b8",
+          "code": "#d3a8ff",
+          "code-bg": "#162f29",
+          "pre-bg": "#040b0a",
+          "pre-text": "#d9efe8",
+          "danger-bg": "#3a1216",
+          "danger": "#ffb4b4",
+          "warn": "#ffd27a",
+          "warn-bg": "#3a2a0c",
+          "edge": "#2b5448",
+          "edge-soft": "#17302a",
+          "dot": "#10231f",
+          "k-file": "#3ddc97",
+          "k-class": "#a7f3d0",
+          "k-function": "#6f9e90",
+          "k-method": "#2f9e83",
+          "k-page": "#e3d0ff",
+          "k-interface": "#5eead4"
+        }
+      },
+      "ember": {
+        "colorScheme": "dark",
+        "tokens": {
+          "bg": "#100b09",
+          "s1": "#18110e",
+          "s2": "#1d1512",
+          "raised": "#2a1e19",
+          "line": "#43302a",
+          "text": "#f2e6dd",
+          "muted": "#bda493",
+          "accent": "#c2410c",
+          "accent-hover": "#a5370a",
+          "on-accent": "#ffffff",
+          "live": "#ffb454",
+          "via": "#d9916a",
+          "code": "#ffc77a",
+          "code-bg": "#2f211b",
+          "pre-bg": "#0a0605",
+          "pre-text": "#f2e6dd",
+          "danger-bg": "#421512",
+          "danger": "#ffbcb0",
+          "warn": "#ffd27a",
+          "warn-bg": "#3a2a0c",
+          "edge": "#57402f",
+          "edge-soft": "#2c201a",
+          "dot": "#21170f",
+          "k-file": "#e0793a",
+          "k-class": "#ffe0b8",
+          "k-function": "#b8a595",
+          "k-method": "#8f5a30",
+          "k-page": "#e8c39e",
+          "k-interface": "#c9855a"
+        }
+      },
+      "daylight": {
+        "colorScheme": "light",
+        "tokens": {
+          "bg": "#f6f9fc",
+          "s1": "#ffffff",
+          "s2": "#ffffff",
+          "raised": "#eef4fa",
+          "line": "#d7e2ec",
+          "text": "#102030",
+          "muted": "#55677a",
+          "accent": "#0b62d6",
+          "accent-hover": "#0950b0",
+          "on-accent": "#ffffff",
+          "live": "#007a8a",
+          "via": "#6aaab4",
+          "code": "#0b5bc7",
+          "code-bg": "#e6eff8",
+          "pre-bg": "#102030",
+          "pre-text": "#e8f0f7",
+          "danger-bg": "#fde3e3",
+          "danger": "#8f1d1d",
+          "warn": "#7a4a00",
+          "warn-bg": "#fff0d0",
+          "edge": "#b6c7d8",
+          "edge-soft": "#e2e9f0",
+          "dot": "#e4ebf2",
+          "k-file": "#0b62d6",
+          "k-class": "#1a2f6b",
+          "k-function": "#5d89c7",
+          "k-method": "#8aa9cf",
+          "k-page": "#1f9fd0",
+          "k-interface": "#4fb3bf"
+        }
+      }
+    },
+    "defaultTheme": "deep-core",
+    "shadows": [
+      {
+        "name": "popover",
+        "value": "0 10px 28px rgba(0, 0, 0, 0.28)",
+        "purpose": "The theme list, the only thing that floats over content."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "All CSS transitions and keyframes."
+      },
+      {
+        "name": "state-change",
+        "value": "150ms",
+        "purpose": "Border and fill changes on hover."
+      },
+      {
+        "name": "theme-change",
+        "value": "200ms",
+        "purpose": "Body background and text when the theme switches."
+      },
+      {
+        "name": "band-land",
+        "value": "260ms, 70ms stagger",
+        "purpose": "Bands arriving in the core log."
+      },
+      {
+        "name": "drill",
+        "value": "240ms, 60ms after its band",
+        "purpose": "Drill line segment growing between bands."
+      },
+      {
+        "name": "bore",
+        "value": "2.4s loop",
+        "purpose": "Line boring down the repository core during a trace."
+      },
+      {
+        "name": "graph-camera",
+        "value": "200ms to 250ms",
+        "purpose": "Graph fit and center moves."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stacked-log",
+        "value": "1180px"
+      },
+      {
+        "name": "single-column",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Core Band",
+      "kind": "custom",
+      "refersTo": "core-band",
+      "description": "One traced symbol: hatch column with depth numeral, then name, kind, relation and summary. The hatch encodes kind.",
+      "html": "<button type=\"button\" class=\"ds-band\"><span class=\"ds-depth\">1</span><span class=\"ds-body\"><span class=\"ds-title\"><code>Registry</code><small>class</small></span><small class=\"ds-rel\">in schema.py</small><span class=\"ds-sum\">One-line summary written by the LLM.</span></span></button>",
+      "css": ".ds-band { --k: var(--k-class); --h-a: color-mix(in srgb, var(--k) 55%, var(--s1)); --h-b: color-mix(in srgb, var(--k) 12%, var(--s1)); --tint: color-mix(in srgb, var(--k) 7%, var(--s1)); --hatch: linear-gradient(90deg, var(--h-a) 50%, var(--h-b) 50%) 0 0 / 8px 100%; width: 100%; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 18px; position: relative; overflow: hidden; padding: 10px 10px 10px 8px; border: 1px solid transparent; border-radius: 3px; background: var(--tint); color: var(--text); font-family: var(--sans); font-size: 14px; text-align: left; cursor: pointer; transition: border-color 150ms var(--ease); } .ds-band::before { content: \"\"; position: absolute; inset: 0 auto 0 0; width: 42px; background: var(--hatch); } .ds-band:hover { border-color: var(--line); } .ds-band:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; } .ds-depth { position: relative; z-index: 2; align-self: start; justify-self: center; min-width: 22px; padding: 0 3px; background: var(--s1); border-radius: 3px; text-align: center; font: 600 13px/1.5 var(--mono); color: var(--live); font-variant-numeric: tabular-nums; } .ds-body { min-width: 0; } .ds-title { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; } .ds-title code { font: 600 13px/1.5 var(--mono); } .ds-title small { font-size: 11.5px; color: var(--muted); } .ds-rel { display: block; font-size: 12px; } .ds-sum { display: block; margin-top: 4px; font-size: 12.5px; line-height: 1.4; color: var(--muted); }"
+    },
+    {
+      "name": "Repository Core Strip",
+      "kind": "custom",
+      "description": "One symbol kind in the idle core: thickness by count, labels on solid patches over the quieter hatch.",
+      "html": "<div class=\"ds-strip\"><span>function</span><b>58</b></div>",
+      "css": ".ds-strip { --k: var(--k-function); --h-a: color-mix(in srgb, var(--k) 26%, var(--s1)); --h-b: color-mix(in srgb, var(--k) 9%, var(--s1)); display: flex; justify-content: space-between; align-items: flex-end; min-height: 72px; padding: 8px 10px 8px 28px; background: radial-gradient(circle at 4px 4px, var(--h-a) 2px, var(--h-b) 2.5px) 0 0 / 8px 8px; border-radius: 2px; color: var(--text); font-family: var(--sans); font-size: 13px; } .ds-strip span, .ds-strip b { padding: 1px 6px; border-radius: 3px; background: var(--s1); } .ds-strip b { font-family: var(--mono); font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Ask Button",
+      "kind": "button",
+      "refersTo": "button-ask",
+      "description": "The one filled action.",
+      "html": "<button type=\"button\" class=\"ds-ask\">Ask</button>",
+      "css": ".ds-ask { padding: 10px 16px; border: 0; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-family: var(--sans); font-size: 14px; font-weight: 600; cursor: pointer; transition: background-color 150ms var(--ease); } .ds-ask:hover:not(:disabled) { background: var(--accent-hover); } .ds-ask:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; } .ds-ask:disabled { opacity: 0.55; cursor: default; }"
+    },
+    {
+      "name": "Control",
+      "kind": "button",
+      "refersTo": "control",
+      "description": "Header control: the theme button and repository select.",
+      "html": "<button type=\"button\" class=\"ds-control\">Theme</button>",
+      "css": ".ds-control { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--text); font-family: var(--sans); font-size: 13px; cursor: pointer; transition: border-color 150ms var(--ease); } .ds-control:hover { border-color: var(--muted); } .ds-control:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Action",
+      "kind": "button",
+      "refersTo": "link-action",
+      "description": "Underlined action: Whole repo, Close, Show this path.",
+      "html": "<button type=\"button\" class=\"ds-link\">Whole repo</button>",
+      "css": ".ds-link { padding: 0; border: 0; background: none; color: var(--code); font-family: var(--sans); font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; } .ds-link:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }"
+    },
+    {
+      "name": "Question Input",
+      "kind": "input",
+      "refersTo": "input-question",
+      "description": "The question field docked at the foot of the questions column.",
+      "html": "<input class=\"ds-input\" placeholder=\"Ask about toolselection…\" aria-label=\"Your question\" />",
+      "css": ".ds-input { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--text); font-family: var(--sans); font-size: 14px; } .ds-input::placeholder { color: var(--muted); opacity: 1; } .ds-input:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }"
+    },
+    {
+      "name": "Theme Option",
+      "kind": "custom",
+      "description": "One theme in the picker popover, with swatches, name and colour note. The current option has a Live ring.",
+      "html": "<label class=\"ds-theme\"><span class=\"ds-sw\"><i style=\"background:#050a12\"></i><i style=\"background:#1069e0\"></i><i style=\"background:#35d6e6\"></i></span><span><b>Deep Core</b><small>Black, blue, cyan</small></span></label>",
+      "css": ".ds-theme { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 6px; color: var(--text); font-family: var(--sans); box-shadow: inset 0 0 0 1px var(--live); cursor: pointer; } .ds-theme:hover { background: var(--s2); } .ds-sw { display: inline-flex; } .ds-sw i { width: 11px; height: 11px; border-radius: 50%; margin-left: -3px; box-shadow: 0 0 0 1px var(--line); } .ds-theme b { display: block; font-size: 13px; font-weight: 600; } .ds-theme small { display: block; font-size: 12px; color: var(--muted); }"
+    },
+    {
+      "name": "Spend Readout",
+      "kind": "custom",
+      "description": "What an answer spent, labels left and tabular figures right.",
+      "html": "<dl class=\"ds-spend\"><div><dt>Tokens</dt><dd>12,480</dd></div><div><dt>Est. cost</dt><dd>$0.0412</dd></div><div><dt>Time</dt><dd>9.3 s</dd></div></dl>",
+      "css": ".ds-spend { display: grid; gap: 2px; margin: 0; padding-top: 10px; border-top: 1px solid var(--line); font-family: var(--sans); font-size: 12.5px; color: var(--text); } .ds-spend div { display: flex; justify-content: space-between; } .ds-spend dt { color: var(--muted); } .ds-spend dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Flagged Label",
+      "kind": "chip",
+      "refersTo": "flag",
+      "description": "Marks a summary the classifier flagged. A label, never a block.",
+      "html": "<span class=\"ds-flag\">Flagged</span>",
+      "css": ".ds-flag { display: inline-block; padding: 0 5px; border-radius: 3px; background: var(--warn-bg); color: var(--warn); font-family: var(--sans); font-size: 11px; font-weight: 600; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Core Sample",
+    "overview": "The workspace reads like a drilling log. A repository is a core of its symbol kinds; a question drills it; the answer comes back as strata stacked by depth, with the same route lit in the graph beside it. Every band can be checked against the graph, and the log states what the answer spent.\n\nIt is a dense working tool, not a presentation: three columns held in the viewport, a type ramp that stops at 15px, flat tonal surfaces, and standard web controls. The identity lives in the hatched strata, the depth numerals and the drill line, and it survives a complete change of palette because a theme is only colours.\n\nMotion carries state and nothing else. Bands land, the drill line grows between them, and the camera moves to what was picked. While a trace runs, the line bores on a loop beside an elapsed count, because its length is unknown and the interface does not pretend otherwise.",
+    "keyCharacteristics": [
+      "Six switchable palettes over one structure; Deep Core is the default.",
+      "Hatch patterns encode symbol kind, alongside the kind written in words.",
+      "Depth numerals, counts and spend in tabular figures.",
+      "One workhorse sans, with mono for code and numbers.",
+      "Flat tonal layering, one soft shadow, small corners.",
+      "Answers rendered as untrusted content."
+    ],
+    "rules": [
+      {
+        "name": "The One Block Rule",
+        "body": "A theme is one block of tokens and nothing else. No theme may change layout, type, shape or motion, and no component may branch on which theme is active. A new theme defines every token; its swatches go in the picker list in `web/src/themes.js`, the one place colour literals repeat, because the picker shows all themes at once.",
+        "section": "colors"
+      },
+      {
+        "name": "The Live Path Rule",
+        "body": "Live marks the answer's traced path and is never assigned to a symbol kind: no `k-*` token equals `live` in any theme. In the graph only lit nodes, lit edges and the picked overlay wear it. Its other uses (the log heading, selected states, the focus ring) are the complete list; give it no new meaning.",
+        "section": "colors"
+      },
+      {
+        "name": "The Canvas Rule",
+        "body": "The graph is canvas and cannot read CSS variables, so `readTokens()` hands it the active values on every theme change. Never hard-code a colour into a graph style.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tight Ramp Rule",
+        "body": "Everything sits between 11px and 15px; rank comes from weight and colour inside that band. Headings inside an answer are held to 14px, so an answer never outranks the workspace around it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Any number a reader compares (counts, depth, tokens, cost, time) uses tabular figures, and spend sits right-aligned in its column.",
+        "section": "typography"
+      },
+      {
+        "name": "The Self-Hosted Face Rule",
+        "body": "Both families ship through `@fontsource-variable` and load from the app's own origin. A hosted font is a third-party request, and the product promises none. Never add a font CDN link, even for a preview.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Lift Rule",
+        "body": "Only an overlay that covers content gets a shadow. Bands, answers, panels and buttons stay flat at rest and on hover; their states change border or fill.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Pixel Tile Rule",
+        "body": "Hatches use pixel-aligned tiles only: stripes, dot grids and line grids whose stops land on whole pixels, because these stay seamless at any band height. Diagonal gradients showed seams and were dropped.",
+        "section": "components"
+      },
+      {
+        "name": "The Beside The Text Rule",
+        "body": "A pattern behind text fails contrast, so the pattern sits in a column beside the text, as on a real log. In an answer band that is a 42px column, with the text on a calm tint (7% of the kind) that holds at least 9.4:1 for primary and 5.1:1 for muted text in every theme. Anything set on a pattern itself, such as a depth numeral or a repository label, carries its own solid surface patch.",
+        "section": "components"
+      },
+      {
+        "name": "The Drill Rule",
+        "body": "One 2px Live line grows down the depth column as bands land, stopping at each sample's end, and the same route lights in the graph. Bands land over 260ms with a 70ms stagger, and the line segment follows 60ms after its band. During a trace the line bores down the repository core on a 2.4s loop beside an elapsed count, and it must never read as a progress bar.",
+        "section": "components"
+      },
+      {
+        "name": "The Untrusted Answer Rule",
+        "body": "Answers quote repository text, so an answer is untrusted content. Images are dropped so nothing fetches a URL by being displayed, links render as plain text showing where they point, and raw HTML stays inert. Summaries in the log get even less: plain text with backticks read as code.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do define every token when adding a theme, and add its swatches to the picker list.",
+      "Do keep hatch stops on whole pixels, using stripes, dot grids or line grids.",
+      "Do set text beside a pattern, or on a solid surface patch when it must sit over one.",
+      "Do mix hatch and tint tones from the kind token with `color-mix`, so every theme inherits them.",
+      "Do write the kind in words next to its pattern and colour.",
+      "Do use tabular figures for any number a reader compares.",
+      "Do stop all CSS motion under `prefers-reduced-motion`.",
+      "Do load fonts through `@fontsource-variable` from the app's own origin."
+    ],
+    "donts": [
+      "Don't use a diagonal gradient for a hatch; diagonal tiles showed seams.",
+      "Don't set text directly on a hatch; a pattern behind text fails contrast.",
+      "Don't give a symbol kind the Live colour, in any theme.",
+      "Don't let a theme change anything except token values.",
+      "Don't render images or live links from an answer; show a link as plain text with its target.",
+      "Don't load a font, or anything else, from a third-party host.",
+      "Don't add a shadow to anything that does not float over content.",
+      "Don't show the trace as a progress bar or percentage; its length is unknown.",
+      "Don't add motion that does not report a change of state."
+    ]
+  }
+}

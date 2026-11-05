@@ -1,5 +1,5 @@
 {
-  "name": "codebase-explorer-web",
+  "name": "repodigger-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -9,10 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/hanken-grotesk": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
     "cytoscape": "^3.30.2",
     "cytoscape-fcose": "^2.2.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "9.0.1",
+    "remark-gfm": "4.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

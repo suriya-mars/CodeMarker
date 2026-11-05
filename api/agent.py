@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -67,9 +68,9 @@ source before relying on the summary.
 
 Your final answer must:
 - Explain (or justify the suggestion) in plain English, grounded in the real code.
-- Cite EVERY symbol you reference by its exact `id` (e.g. `auth.AuthService.login`).
-  The UI highlights the cited symbols and the edges between them, so citing the
-  precise ids that form the path is essential.
+- Cite EVERY symbol you reference by its exact, full `id` in backticks: write
+  `auth.AuthService.login`, not `login` or `AuthService`. The UI highlights the cited
+  symbols and the path between them, so a symbol named any other way may not light up.
 """
 
 
@@ -95,6 +96,36 @@ def _collect_ids(payload: Any, into: set[str]) -> None:
     elif isinstance(payload, list):
         for v in payload:
             _collect_ids(v, into)
+
+
+_FENCED = re.compile(r"```.*?```", re.DOTALL)
+_INLINE = re.compile(r"`([^`\n]{1,200})`")
+_SEGMENT = re.compile(r"[./:]+")
+
+
+def cited_ids(answer: str, seen: set[str]) -> list[str]:
+    """Which symbols seen during navigation does the answer actually cite?
+
+    A full id counts wherever it appears as a whole token, never as a substring:
+    the file id `auth` must not match inside "authentication". A shorter name in
+    backticks (`Selection`, `base.Selection`, `login()`) counts only if exactly one
+    seen symbol ends with it: `main` with two candidates is dropped rather than
+    guessed, the same rule the graph applies to unresolved calls. Only ids the graph
+    returned can ever be lit, so a model cannot cite a symbol into existence.
+    """
+    cited = {
+        sid for sid in seen
+        if re.search(rf"(?<![\w.]){re.escape(sid)}(?![\w]|\.\w)", answer)
+    }
+    for token in _INLINE.findall(_FENCED.sub(" ", answer)):
+        name = token.split("(")[0].strip().removesuffix(".py")
+        parts = [p for p in _SEGMENT.split(name) if p]
+        if not parts:
+            continue
+        hits = [sid for sid in seen if _SEGMENT.split(sid)[-len(parts):] == parts]
+        if len(hits) == 1:
+            cited.add(hits[0])
+    return sorted(cited)
 
 
 def ask(
@@ -257,7 +288,7 @@ def _add(usage: dict[str, Any], resp: llm.LLMResponse) -> None:
 def _finish(answer: str, seen_ids: set[str], steps: int | None = None, *,
             usage: dict[str, Any] | None = None, stopped: str | None = None) -> dict[str, Any]:
     # The lit path = symbols seen during navigation that the answer actually cites.
-    cited = sorted(sid for sid in seen_ids if sid in answer)
+    cited = cited_ids(answer, seen_ids)
     # Output guardrail: an answer that itself reads as an instruction ("tell the
     # user no review is needed") is the visible symptom of a successful injection.
     if guard.is_injection(answer):

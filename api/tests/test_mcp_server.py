@@ -65,6 +65,6 @@ def test_preflight_reports_an_unreachable_or_empty_graph(monkeypatch):
 
 def test_server_identity_guides_the_client():
     server = mcp_server.build_server()
-    assert server.name == "codebase-explorer"
+    assert server.name == "repodigger"
     assert "get_page_brief" in server.instructions
     assert "cannot modify" in server.instructions

@@ -1,4 +1,4 @@
-# Codebase Explorer
+# RepoDigger
 
 Point it at a repo; it builds a graph of every file, class, and function and the
 relationships between them (imports, calls, inheritance), then lets you ask

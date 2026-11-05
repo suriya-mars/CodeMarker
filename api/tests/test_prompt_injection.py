@@ -263,3 +263,122 @@ def test_scoped_tools_cannot_read_another_repo(tmp_path, monkeypatch):
     finally:
         graph.clear_graph()
         graph.close_driver()
+
+
+# --- the graph view: one repo at a time, and a path between citations --------
+
+
+def test_connect_needs_two_ids_and_caps_the_search(cypher):
+    assert tools.connect(["a"]) == {"nodes": [], "edges": []}
+    assert cypher == []  # nothing to connect: no query
+    tools.connect([f"s{i}" for i in range(50)])
+    assert len(cypher[0][1]["ids"]) == 8
+
+
+def test_graph_route_rejects_a_bad_repo_name(monkeypatch):
+    assert _client(monkeypatch).get("/graph", params={"repo": "../x"}).status_code == 400
+
+
+URI_NEO = os.environ.get("NEO4J_TEST_URI")
+
+
+@pytest.mark.skipif(not (URI_NEO and os.environ.get("NEO4J_TEST_PASSWORD")),
+                    reason="no Neo4j at NEO4J_TEST_URI")
+def test_graph_repos_and_connect_against_a_live_graph(tmp_path, monkeypatch):
+    import indexer
+
+    monkeypatch.setenv("NEO4J_URI", URI_NEO)
+    monkeypatch.setenv("NEO4J_PASSWORD", os.environ["NEO4J_TEST_PASSWORD"])
+    graph.close_driver()
+    graph.setup_schema()
+    graph.clear_graph()
+    (tmp_path / "shop").mkdir()
+    (tmp_path / "shop" / "shop_mod.py").write_text(
+        "def low():\n    return 1\n\n\ndef mid():\n    return low()\n\n\n"
+        "def top():\n    return mid()\n\n\ndef alone():\n    return 2\n"
+    )
+    (tmp_path / "vault").mkdir()
+    (tmp_path / "vault" / "vault_mod.py").write_text("def beta():\n    return 1\n")
+    for name in ("shop", "vault"):
+        indexer.index_repo(str(tmp_path / name), repo=name, stages=("parse",))
+    try:
+        c = _client(monkeypatch)
+        assert c.get("/repos").json() == [{"repo": "shop", "symbols": 5},
+                                          {"repo": "vault", "symbols": 2}]
+        g = c.get("/graph", params={"repo": "vault"}).json()
+        assert {n["id"] for n in g["nodes"]} == {"vault_mod", "vault_mod.beta"}
+        assert {(e["source"], e["target"], e["type"]) for e in g["edges"]} == {
+            ("vault_mod", "vault_mod.beta", "CONTAINS")}
+
+        # a real route, including the symbol in between that was never cited
+        path = tools.connect(["shop_mod.low", "shop_mod.top"])
+        assert {n["id"] for n in path["nodes"]} >= {"shop_mod.low", "shop_mod.top"}
+        assert len(path["edges"]) >= 2
+        with tools.scoped("shop"):  # a pair spanning repos has no route, and is out of scope
+            assert tools.connect(["shop_mod.low", "vault_mod.beta"])["edges"] == []
+    finally:
+        graph.clear_graph()
+        graph.close_driver()
+
+
+# --- "Open code": a class or function's stored source ----------------------------
+
+
+def test_symbol_source_returns_code_and_scopes_the_query(monkeypatch):
+    seen = []
+
+    def fake(query, **params):
+        seen.append(params)
+        return [{"id": "m.f", "name": "f", "kind": "function", "path": "m.py", "language": "python",
+                 "start_line": 3, "end_line": 4, "source": "def f():\n    pass"}]
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(graph, "_run", fake)
+    r = c.get("/symbol/source", params={"id": "a/b::c'} DETACH DELETE s", "repo": "shop"})
+    assert r.status_code == 200 and r.json()["source"] == "def f():\n    pass"
+    assert r.json()["truncated"] is False
+    # hostile text stays a parameter, and files are excluded by kind
+    assert seen[0]["id"] == "a/b::c'} DETACH DELETE s" and seen[0]["repo"] == "shop"
+    assert "file" not in seen[0]["kinds"] and "function" in seen[0]["kinds"]
+
+
+def test_symbol_source_refuses_unknown_symbols_and_bad_repos(monkeypatch):
+    c = _client(monkeypatch)
+    monkeypatch.setattr(graph, "_run", lambda q, **p: [])
+    assert c.get("/symbol/source", params={"id": "nope"}).status_code == 404
+    assert c.get("/symbol/source", params={"id": "x", "repo": "../y"}).status_code == 400
+
+
+def test_symbol_source_caps_huge_symbols(monkeypatch):
+    c = _client(monkeypatch)
+    monkeypatch.setattr(graph, "_run", lambda q, **p: [{"source": "x" * 300_000}])
+    body = c.get("/symbol/source", params={"id": "big"}).json()
+    assert body["truncated"] is True and len(body["source"]) == 200_000
+
+
+@pytest.mark.skipif(not (URI_NEO and os.environ.get("NEO4J_TEST_PASSWORD")),
+                    reason="no Neo4j at NEO4J_TEST_URI")
+def test_symbol_source_against_a_live_graph(tmp_path, monkeypatch):
+    import indexer
+
+    monkeypatch.setenv("NEO4J_URI", URI_NEO)
+    monkeypatch.setenv("NEO4J_PASSWORD", os.environ["NEO4J_TEST_PASSWORD"])
+    graph.close_driver()
+    graph.setup_schema()
+    graph.clear_graph()
+    (tmp_path / "shop").mkdir()
+    (tmp_path / "shop" / "shop_mod.py").write_text(
+        "class Cart:\n    def total(self):\n        return 1\n\n\ndef helper():\n    return 2\n"
+    )
+    indexer.index_repo(str(tmp_path / "shop"), repo="shop", stages=("parse",))
+    try:
+        c = _client(monkeypatch)
+        for sid, expected in (("shop_mod.Cart", "class Cart"), ("shop_mod.Cart.total", "def total"),
+                              ("shop_mod.helper", "def helper")):
+            r = c.get("/symbol/source", params={"id": sid, "repo": "shop"})
+            assert r.status_code == 200 and expected in r.json()["source"]
+        assert c.get("/symbol/source", params={"id": "shop_mod", "repo": "shop"}).status_code == 404
+        assert c.get("/symbol/source", params={"id": "shop_mod.helper", "repo": "vault"}).status_code == 404
+    finally:
+        graph.clear_graph()
+        graph.close_driver()

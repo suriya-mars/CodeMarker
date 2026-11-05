@@ -72,7 +72,7 @@ def build_server() -> MCPServer:
     _assert_read_only()
 
     server = MCPServer(
-        name="codebase-explorer",
+        name="repodigger",
         version="0.1.0",
         instructions=(
             "Read-only graph tools over an indexed codebase (Python, C#, "

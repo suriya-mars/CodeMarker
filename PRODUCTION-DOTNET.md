@@ -1,6 +1,6 @@
 # PRODUCTION-DOTNET.md
 
-Production plan for retargeting Codebase Explorer at a **~2M LOC C# / WebForms
+Production plan for retargeting RepoDigger at a **~2M LOC C# / WebForms
 codebase undergoing refactoring and migration to .NET Core**, with SQL Server as a
 first-class part of the graph, delivered to the team as a **Claude Code plugin**.
 

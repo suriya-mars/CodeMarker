@@ -244,6 +244,12 @@ def write_communities(
 ) -> None:
     if not communities:
         return
+    # Leiden renumbers on every run, and MERGE only adds: without this, symbols keep
+    # memberships from earlier runs and deleted code leaves stale communities listed.
+    graph._run("MATCH (:Symbol)-[r:IN_COMMUNITY]->(:Community) DELETE r")
+    graph._run("MATCH (s:Symbol) WHERE s.community_id IS NOT NULL REMOVE s.community_id")
+    graph._run("MATCH (c:Community) WHERE NOT c.id IN $ids DETACH DELETE c",
+               ids=list(communities))
     # set community_id on each member symbol
     rows = [{"id": sid, "cid": cid} for sid, cid in assignments.items()]
     for batch in _batches(rows):

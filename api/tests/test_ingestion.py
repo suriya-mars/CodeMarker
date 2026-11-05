@@ -217,3 +217,17 @@ def test_deletion_is_scoped_to_one_repo(monkeypatch, workdir):
     assert graph._run(
         "MATCH (s:Symbol {id:'other.thing'}) RETURN count(s) AS n"
     )[0]["n"] == 1
+
+
+def test_community_rerun_leaves_no_stale_communities(monkeypatch):
+    """Leiden renumbers on every run, and deleted code must not stay listed."""
+    monkeypatch.setattr(summarize, "summarize_community", lambda n, m: f"cluster {n}")
+    graph._run("CREATE (:Symbol {id: 'a'}), (:Symbol {id: 'b'})")
+    indexer.write_communities({"a": "old", "b": "old"}, {"old": ["a", "b"]}, {})
+    indexer.write_communities({"a": "new"}, {"new": ["a"]}, {})
+    assert graph._run("MATCH (c:Community) RETURN c.id AS id") == [{"id": "new"}]
+    assert graph._run(
+        "MATCH (s:Symbol)-[:IN_COMMUNITY]->(c) RETURN s.id AS s, c.id AS c"
+    ) == [{"s": "a", "c": "new"}]
+    rows = graph._run("MATCH (s:Symbol {id: 'b'}) RETURN s.community_id AS c")
+    assert rows == [{"c": None}]
