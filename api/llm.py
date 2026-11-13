@@ -93,6 +93,13 @@ SYNTH_MODEL = "claude-opus-4-8"
 SUMMARY_MODEL = "claude-haiku-4-5-20251001"
 
 
+def summary_model() -> str:
+    """The model that actually writes index-time summaries under this provider."""
+    if _provider() == "openai":
+        return os.environ.get("OPENAI_MODEL", "")
+    return SUMMARY_MODEL
+
+
 def _provider() -> str:
     return os.environ.get("LLM_PROVIDER", "anthropic").lower()
 
@@ -120,6 +127,10 @@ class LLMResponse:
     # process totals can never disagree.
     model: str = ""
     cost_usd: float = 0.0
+    # How much of input_tokens was read from, or written to, the provider's
+    # prompt cache. input_tokens always counts ALL input, cached or not.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     @property
     def tokens(self) -> int:
@@ -162,12 +173,26 @@ def _timeout() -> float:
     return float(os.environ.get("LLM_TIMEOUT_S", "60"))
 
 
-def _usage(resp) -> tuple[int, int]:
+def _usage(resp) -> tuple[int, int, int, int]:
+    """(all input, output, cache read, cache write), the same on both providers.
+
+    The providers count differently. Anthropic's `input_tokens` is only the input
+    AFTER the last cache breakpoint, with cached input reported separately, so it
+    is added back here: otherwise turning the cache on would quietly shrink every
+    token budget and quota check. OpenAI's `prompt_tokens` already includes cached
+    input, and it charges nothing extra to write the cache.
+    """
     u = getattr(resp, "usage", None)
     if u is None:
-        return 0, 0
-    return (getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0) or 0,
-            getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0) or 0)
+        return 0, 0, 0, 0
+    if getattr(u, "prompt_tokens", None) is not None:  # OpenAI
+        details = getattr(u, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) or 0
+        return int(u.prompt_tokens or 0), int(getattr(u, "completion_tokens", 0) or 0), cached, 0
+    read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+    write = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+    return (int(getattr(u, "input_tokens", 0) or 0) + read + write,
+            int(getattr(u, "output_tokens", 0) or 0), read, write)
 
 
 def _openai_model() -> str:
@@ -186,16 +211,43 @@ def _report(tracker, resp) -> None:
     customer source, and CLAUDE.md §2.3 permits no third-party egress of it.
     """
     try:
-        u = getattr(resp, "usage", None)
-        if u is None:
-            return
-        tracker.usage(
-            getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0) or 0,
-            getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0) or 0,
-            getattr(u, "cache_read_input_tokens", 0) or 0,
-        )
+        tracker.usage(*_usage(resp))
     except Exception:  # noqa: BLE001 — accounting must never break a call
         pass
+
+
+# --- Prompt caching (Anthropic) -----------------------------------------------
+# The agent loop sends the same tools and system prompt on every step of every
+# question, and each step resends the whole conversation so far. Anthropic caches
+# a prompt prefix only where it is marked, and then reads it at about a tenth of the
+# input price. Two marks:
+#   * the system prompt: covers tools + system, shared by every user's questions
+#   * the last block of the conversation: the next step of THIS question reads
+#     everything before its new tool results from the cache
+# Nothing is shared between users except the tools and system prompt, which are
+# the same for everyone. OpenAI caches automatically and needs no marks.
+_CACHE = {"type": "ephemeral"}
+
+
+def _prompt_cache() -> bool:
+    return os.environ.get("LLM_PROMPT_CACHE", "1") != "0"
+
+
+def _with_cache_marks(system: str, messages: list[dict[str, Any]]):
+    """Copies of system and messages with the two cache marks. The caller's
+    conversation is not modified: a mark left behind would move the cache point.
+
+    Every message goes out in block form. The question is the last message on the
+    first step, so it carries the mark and must be a block; on later steps it would
+    otherwise go out as a plain string, and the prefix would no longer match."""
+    marked_system = [{"type": "text", "text": system, "cache_control": _CACHE}]
+    out = [{**m, "content": ([{"type": "text", "text": m["content"]}]
+                             if isinstance(m["content"], str)
+                             else [dict(b) for b in m["content"]])}
+           for m in messages]
+    if out and out[-1]["content"]:
+        out[-1]["content"][-1]["cache_control"] = _CACHE
+    return marked_system, out
 
 
 # --- Public surface ---------------------------------------------------------
@@ -263,6 +315,11 @@ def _create_message_anthropic(
     }
     if tools:  # omit when empty so the model is forced to answer in text
         kwargs["tools"] = tools
+        # Only the tool-using steps are marked. The final answer without tools has
+        # a different prefix and often a different model, so it can read no cache
+        # entry, and a cache write there is paid for and never used.
+        if _prompt_cache():
+            kwargs["system"], kwargs["messages"] = _with_cache_marks(system, messages)
     with telemetry.track(model, "navigate" if tools else "synthesize") as t:
         resp = _anthropic().messages.create(**kwargs)
         _report(t, resp)
@@ -279,10 +336,12 @@ def _create_message_anthropic(
                     "input": block.input,
                 }
             )
-    tokens_in, tokens_out = _usage(resp)
+    tokens_in, tokens_out, read, write = _usage(resp)
     return LLMResponse(content=content, stop_reason=resp.stop_reason,
                        input_tokens=tokens_in, output_tokens=tokens_out, model=model,
-                       cost_usd=telemetry.cost_of(model, tokens_in, tokens_out))
+                       cache_read_tokens=read, cache_write_tokens=write,
+                       cost_usd=telemetry.cost_of(model, tokens_in, tokens_out,
+                                                  cache_read=read, cache_write=write))
 
 
 def _create_message_openai(
@@ -293,6 +352,9 @@ def _create_message_openai(
 ) -> LLMResponse:
     """Translate the Anthropic-shaped conversation to OpenAI chat format, call,
     then translate the response back to Anthropic blocks.
+
+    OpenAI caches a repeated prompt prefix by itself (1,024 tokens or more). The
+    system prompt and tools come first and never change, so they are reused.
     """
     oai_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     for msg in messages:
@@ -333,11 +395,13 @@ def _create_message_openai(
             }
         )
     stop_reason = "tool_use" if choice.finish_reason == "tool_calls" else "end_turn"
-    tokens_in, tokens_out = _usage(resp)
+    tokens_in, tokens_out, read, write = _usage(resp)
     used = _openai_model()
     return LLMResponse(content=content, stop_reason=stop_reason,
                        input_tokens=tokens_in, output_tokens=tokens_out, model=used,
-                       cost_usd=telemetry.cost_of(used, tokens_in, tokens_out))
+                       cache_read_tokens=read, cache_write_tokens=write,
+                       cost_usd=telemetry.cost_of(used, tokens_in, tokens_out,
+                                                  cache_read=read, cache_write=write))
 
 
 def _to_openai_messages(msg: dict[str, Any]) -> list[dict[str, Any]]:

@@ -11,6 +11,7 @@
   none   Local development only. Logged loudly at startup.
 
 `/health` is always open: ALB health checks bypass authentication.
+`/webhooks/github` skips these modes and verifies GitHub's signature instead.
 
 The only outbound call here is fetching the ALB's PUBLIC signing key from
 AWS, by key id. No request content, and no source code, is ever sent.
@@ -32,7 +33,9 @@ import jwt
 from fastapi import HTTPException, Request
 
 _MODES = {"none", "token", "alb"}
-_OPEN_PATHS = {"/health"}
+# Open to login checks only. The webhook proves itself with GitHub's signature instead
+# (main.github_webhook), because GitHub cannot log in.
+_OPEN_PATHS = {"/health", "/webhooks/github"}
 _KID = re.compile(r"^[A-Za-z0-9-]{1,128}$")
 _ARN = re.compile(r"^arn:aws[\w-]*:elasticloadbalancing:([a-z0-9-]+):\d{12}:loadbalancer/.+$")
 _keys: dict[str, str] = {}  # kid -> PEM; ALB keys are immutable per kid

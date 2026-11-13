@@ -18,6 +18,7 @@ base64, hex) — is flagged in its summary rather than trusted.
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 import guard
@@ -26,7 +27,11 @@ import untrusted
 from parsing import Symbol
 
 _MAX_SOURCE_CHARS = 2000
+# Bump when the symbol prompt or clean_summary changes, so cached summaries written
+# under the old wording are regenerated instead of reused.
+PROMPT_VERSION = "1"
 _MAX_SUMMARY_CHARS = 240
+_MAX_COMMUNITY_MEMBERS = 40  # how many member summaries one community prompt shows
 
 def _system(tag: str) -> str:
     # The boundary is random per call (untrusted.wrap), so the code cannot
@@ -100,6 +105,28 @@ def clean_summary(text: str | None, *, source: str = "") -> str | None:
     return line
 
 
+def _digest(values: tuple[str, ...]) -> str:
+    """Each value is hashed on its own, so text in one field cannot imitate a
+    boundary and make two different inputs collide."""
+    h = hashlib.sha256()
+    for v in values:
+        h.update(hashlib.sha256(str(v).encode("utf-8", "replace")).digest())
+    return h.hexdigest()
+
+
+def summary_key(symbol: Symbol) -> str:
+    """Identifies exactly what summarize_symbol would send and how its answer is
+    judged: the same key means the same summary can be reused without a call.
+
+    Ids and paths are left out on purpose, so a moved file, reverted change or the
+    same code in another repo reuses its summary. The name or signature stays in,
+    because the prompt shows it. The model, prompt version and guardrail settings are
+    in, so changing any of them regenerates rather than reusing an old judgement."""
+    header = symbol.name if symbol.kind == "file" else (symbol.signature or symbol.name)
+    return _digest((PROMPT_VERSION, llm.summary_model(), guard.mode(), str(guard.threshold()),
+                    symbol.kind, symbol.language, header, symbol.source[:_MAX_SOURCE_CHARS]))
+
+
 def summarize_symbol(symbol: Symbol) -> str | None:
     """One natural-language line describing what a Symbol does.
 
@@ -135,9 +162,33 @@ def summarize_symbol(symbol: Symbol) -> str | None:
     return clean_summary(text, source=source)
 
 
+def community_prompt_members(
+    members: list[str], summaries_by_symbol: dict[str, str]
+) -> list[tuple[str, str]]:
+    """The (id, summary) pairs one community's prompt is built from: the first
+    members by id, a symbol with no summary yet standing in as its own id."""
+    return [(m, summaries_by_symbol.get(m) or m)
+            for m in sorted(members)[:_MAX_COMMUNITY_MEMBERS]]
+
+
+def community_fingerprint(shown: list[tuple[str, str]]) -> str:
+    """Identifies exactly what the LLM would be shown for a community.
+
+    Leiden renumbers communities on every run, so the id says nothing about the
+    content; this does. Same input means the same paid-for summary can be reused.
+    A member beyond the prompt's cap does not change it, because the model never
+    sees that member. Each value is hashed separately, so text in one field cannot
+    imitate a boundary and make two different communities collide.
+    """
+    digest = hashlib.sha256()
+    for value in (v for pair in shown for v in pair):
+        digest.update(hashlib.sha256(value.encode("utf-8", "replace")).digest())
+    return digest.hexdigest()
+
+
 def summarize_community(name: str, member_summaries: list[str]) -> str:
     """One line describing an architectural community from its members' summaries."""
-    joined = "\n".join(f"- {s}" for s in member_summaries[:40])
+    joined = "\n".join(f"- {s}" for s in member_summaries[:_MAX_COMMUNITY_MEMBERS])
     tag, fenced = untrusted.wrap(joined, "summaries")
     prompt = (
         "The following one-line summaries belong to one cluster of related code "

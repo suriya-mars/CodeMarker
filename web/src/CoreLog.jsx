@@ -74,7 +74,7 @@ export function buildCore(cited, path, describe) {
   return bands;
 }
 
-function Summary({ text }) {
+export function Summary({ text }) {
   if (!text) return null;
   const flagged = text.startsWith("[flagged");
   const body = flagged ? text.replace(/^\[flagged[^\]]*\]\s*/, "") : text;
@@ -99,7 +99,10 @@ export function SymbolDetail({ symbol, onClose, onOpenCode }) {
       <code className="full-id">{symbol.id}</code>
       {symbol.path && <small className="where">{symbol.path}</small>}
       <Summary text={symbol.summary} />
-      {HAS_CODE.includes(symbol.kind) && (
+      {symbol.indexed === false && (
+        <small className="where">Added by this change, so it is not in the graph yet.</small>
+      )}
+      {symbol.indexed !== false && HAS_CODE.includes(symbol.kind) && (
         <button type="button" className="control open-code" onClick={onOpenCode}>
           Open code
         </button>
@@ -108,12 +111,15 @@ export function SymbolDetail({ symbol, onClose, onOpenCode }) {
   );
 }
 
-function Spend({ spend }) {
+export function Spend({ spend }) {
   if (!spend) return null;
   const tokens = (spend.usage?.input_tokens || 0) + (spend.usage?.output_tokens || 0);
   return (
     <dl className="spend">
       <div><dt>Tokens</dt><dd>{tokens.toLocaleString()}</dd></div>
+      {spend.usage?.cache_read_tokens > 0 && (
+        <div><dt>Read from cache</dt><dd>{spend.usage.cache_read_tokens.toLocaleString()}</dd></div>
+      )}
       <div><dt>Est. cost</dt><dd>${(spend.usage?.cost_usd || 0).toFixed(4)}</dd></div>
       <div><dt>Time</dt><dd>{spend.seconds} s</dd></div>
     </dl>
@@ -123,9 +129,12 @@ function Spend({ spend }) {
 // The repo itself as a core, a band per symbol kind, thickness in proportion to the
 // count. While a question is being traced the drill runs down it; how long the trace
 // will take is unknown, so it never pretends to show progress.
-function RepoCore({ counts, repo, busy, elapsed }) {
+function RepoCore({ counts, repo, busy, elapsed, hint }) {
   const kinds = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const total = kinds.reduce((sum, [, n]) => sum + n, 0);
+  if (!total && !repo) {
+    return <p className="hint">Add a repository in the Repos tab. Its symbols stack here by kind.</p>;
+  }
   if (!total) return null;
   return (
     <>
@@ -147,20 +156,20 @@ function RepoCore({ counts, repo, busy, elapsed }) {
       </ol>
       {!busy && (
         <p className="hint">
-          Ask a question and the symbols it traces stack here by depth, with the path lit in the graph.
+          {hint || "Ask a question and the symbols it traces stack here by depth, with the path lit in the graph."}
         </p>
       )}
     </>
   );
 }
 
-export default function CoreLog({ core, spend, busy, elapsed, counts, repo, selectedId, onPick, onWholeRepo }) {
+export default function CoreLog({ core, spend, busy, elapsed, counts, repo, selectedId, onPick, onWholeRepo, hint }) {
   const samples = core ? new Set(core.map((b) => b.sample)).size : 0;
   const levels = core && core.length ? Math.max(...core.map((b) => b.depth)) + 1 : 0;
   const showRepo = busy || !core;
   return (
     <aside className="log" aria-label="Core log" aria-busy={busy}>
-      {showRepo && <RepoCore counts={counts} repo={repo} busy={busy} elapsed={elapsed} />}
+      {showRepo && <RepoCore counts={counts} repo={repo} busy={busy} elapsed={elapsed} hint={hint} />}
       {!showRepo && (
         <div className="log-head">
           <h2>Core log</h2>

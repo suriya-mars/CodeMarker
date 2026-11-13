@@ -191,7 +191,7 @@ The frontmatter records Deep Core, the default. All six themes are complete bloc
 - **Ice Text and Muted Steel** (text, muted): primary text and all secondary text, placeholders included.
 - **Graph Quiet Tones** (edge, edge-soft, dot): dependency edges, the fainter CONTAINS edges, and the 28px dot grid.
 - **Code Block** (pre-bg, pre-text): fenced code in answers. It stays dark in the light themes.
-- **Status** (warn, warn-bg, danger, danger-bg): the Flagged label and error messages. Used only for those states.
+- **Status** (warn, warn-bg, danger, danger-bg): the Flagged label, error messages, report warnings and risk labels. Used only for those states.
 
 ### Named Rules
 **The One Block Rule.** A theme is one block of tokens and nothing else. No theme may change layout, type, shape or motion, and no component may branch on which theme is active. A new theme defines every token; its swatches go in the picker list in `web/src/themes.js`, the one place colour literals repeat, because the picker shows all themes at once.
@@ -299,7 +299,14 @@ The idle state of the log: one strip per symbol kind, its thickness in proportio
 - **Disabled:** the input and Ask lock together while a question runs.
 
 ### Navigation
-There is no navigation; the workspace is one view. The picker is the only chrome menu.
+The workspace is one view. Two tabs at the head of the questions column, Ask and Review, change what that column and the log show; the graph stays. The current tab has Text colour and a 2px Live underline. Both stay mounted, so switching never loses an answer or a report. The picker is the only chrome menu.
+
+### Review
+The questions column holds the report's computed facts, and the log holds its blast radius.
+
+- **Blast radius:** core bands, one sample per changed symbol with what depends on it below. The numeral is hops from that change, and the drill line joins bands of one sample only, because a line between samples would claim a route that does not exist. The same route is lit in the graph.
+- **Risk label:** a 3px label in words. High and critical use the danger pair, medium the warn pair, low the raised surface. Risk is never colour alone.
+- **Facts before narrative:** counts, flags and diffs come first, and details disclose further. The LLM runs only from the docked input, under a note saying it costs tokens, and its answers sit under their own heading with their spend.
 
 ### Theme Picker
 A control showing the current theme's three overlapping swatches opens a 248px popover of native radio inputs, each with swatches, name and a plain colour note. The current option has a 1px inset Live ring; hovering fills with the panel surface. Escape or an outside click closes it. The choice is remembered when storage allows; if it is blocked, Deep Core applies and nothing breaks.

@@ -122,9 +122,11 @@ def test_impact_ask_uses_digest_and_restricted_tools(monkeypatch):
     monkeypatch.setattr(llm, "create_message", fake_create_message)
     out = impact.ask(report, "what breaks?")
 
-    # report in the USER turn, inside a random boundary the system prompt names
-    tag = re.match(r"<(impact-report-[0-9a-f]{16})>", seen["first"]).group(1)
-    assert seen["system"] == impact.impact_system(tag)
+    # report in the USER turn, inside a random boundary the message itself names;
+    # the system prompt stays byte-identical, so the provider can cache it
+    tag = re.search(r"<(impact-report-[0-9a-f]{16})>", seen["first"]).group(1)
+    assert seen["first"].startswith(f"The impact report is between <{tag}> and </{tag}>.")
+    assert seen["system"] == impact.IMPACT_SYSTEM_PROMPT and tag not in seen["system"]
     assert f"</{tag}>" in seen["first"] and "<impact_report>" not in seen["system"]
     assert "serves requests" in seen["first"]  # summaries stand in for source
     assert seen["first"].rstrip().endswith("what breaks?")
@@ -271,3 +273,33 @@ def test_commit_impact_end_to_end(tmp_path, monkeypatch):
     finally:
         graph.clear_graph()
         graph.close_driver()
+
+
+def test_range_status_without_commits_or_a_git_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(impact, "indexed_commit", lambda repo: None)
+    plain = impact.range_status(str(tmp_path), "r")
+    assert plain["git"] is False and plain["recent"] == []
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    assert impact.range_status(str(tmp_path), "r")["git"] is False  # no commits yet
+
+
+def test_range_status_counts_commits_since_the_index(tmp_path, monkeypatch):
+    def git(*a):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(tmp_path), *a],
+                       check=True, capture_output=True)
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "first")
+    first = impact.git_head(str(tmp_path))
+    git("commit", "-q", "--allow-empty", "-m", "second <b>subject</b>")
+    monkeypatch.setattr(impact, "indexed_commit", lambda repo: first)
+    got = impact.range_status(str(tmp_path), "r")
+    assert got["ahead"] == 1
+    assert got["indexed"]["sha"] == first
+    assert got["head"]["subject"] == "second <b>subject</b>"  # the UI shows it as text
+    assert [c["subject"] for c in got["recent"]] == ["second <b>subject</b>", "first"]
+
+
+def test_a_commit_that_does_not_exist_is_named_in_plain_words(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    with pytest.raises(ValueError, match="no commit named 'nope'"):
+        impact._resolve(str(tmp_path), "nope")

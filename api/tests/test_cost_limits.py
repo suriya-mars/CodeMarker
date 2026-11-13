@@ -233,3 +233,28 @@ def test_usage_report_and_me_endpoint_show_only_your_own(monkeypatch):
     finally:
         graph._run("MATCH (q:UsageQuota|UserQuota) DELETE q")
         graph.close_driver()
+
+
+def test_exhausted_quota_blocks_the_llm_but_not_the_free_report(monkeypatch, tmp_path):
+    """A report calls no LLM, so a user out of tokens can still run one."""
+    import impact
+    import main
+    import quota
+
+    (tmp_path / "svc").mkdir()
+    monkeypatch.setenv("REPOS_ROOT", str(tmp_path))
+    monkeypatch.setenv("AUTH_MODE", "none")
+    monkeypatch.setenv("LLM_RATE_PER_MIN", "0")
+
+    def spent(request):
+        raise main.HTTPException(status_code=429, detail="daily token quota exhausted")
+
+    monkeypatch.setattr(quota, "guard", spent)
+    report = type("R", (), {"to_dict": lambda self: {"id": "r"}})()
+    monkeypatch.setattr(impact, "analyze", lambda *a, **k: report)
+    monkeypatch.setattr(impact, "to_markdown", lambda r: "md")
+    from fastapi.testclient import TestClient
+
+    client = TestClient(main.app)
+    assert client.post("/impact", json={"repo": "svc"}).status_code == 200
+    assert client.post("/impact", json={"repo": "svc", "explain": True}).status_code == 429

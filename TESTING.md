@@ -43,6 +43,12 @@ docker inspect -f '{{.State.Health.Status}}' codemarker-neo4j-1    # repeat unti
 
 ## 2. Add a repo and index it
 
+The simplest way: open http://localhost:3000 (step 3), go to the **Repos** tab, paste
+a public https URL such as `https://github.com/pallets/itsdangerous`, and choose
+**Add and index**. Details in [RUNBOOK.md §4a-2](RUNBOOK.md).
+
+Or place it in `./repos` yourself:
+
 The repo must be a directory under `./repos`. It must be a git repository for
 impact analysis to work.
 
@@ -125,6 +131,27 @@ From the command line instead, with an optional re-index afterwards:
 docker compose run --rm api python -m impact /repos/myrepo --repo myrepo --ask
 docker compose run --rm api python -m impact /repos/myrepo --repo myrepo --reindex
 ```
+
+**Impact report in the web UI.** Open the **Review** tab at http://localhost:3000,
+choose **Analyze**, then open a saved report. The blast radius stacks in the middle
+column and lights in the graph. **Explain** is the only step that uses the LLM.
+
+**Pull request comments.** Setup is in [RUNBOOK.md §4b](RUNBOOK.md). Without `--post`
+this prints the comment and posts nothing:
+
+```bash
+docker compose run --rm api python -m pr_review my-org/my-service 12
+```
+
+**Community summary cache.** Run the community stage twice. The second run should
+print `0 generated`, and cost nothing:
+
+```bash
+docker compose run --rm api python -m indexer /repos/myrepo --repo myrepo --stage community
+```
+
+The first run after upgrading regenerates every community once, because earlier
+summaries have no fingerprint to match.
 
 **Usage and cost**
 
@@ -238,6 +265,15 @@ Stop the main stack first if it is running; both use the same ports.
 | Indexing | Symbol, edge and community counts printed; `failed: 0` |
 | `/ask` | An answer, `cited_ids`, `usage` with `cost_usd`, `stopped: null` |
 | `/impact` after a signature change | A `SIGNATURE_CHANGED_CALLERS_UNTOUCHED` flag listing the callers |
+| Review tab, after a signature change | A High risk label, the flag naming the callers, each changed symbol as its own sample in the log |
+| Second `--stage community` run | `community summaries: 0 generated, N reused` |
+| `python -m pr_review <repo> <n>` | The comment printed; nothing posted |
+| Ask tab, Blast radius mode, before an analysed refresh | "No new symbols or code to check blast radius", and the question box disabled |
+| Commit a change, then **Refresh and analyse** in Blast radius mode | "Change ready to check" with risk and counts; the report is listed in Review |
+| Ask tab, Security or Refactor mode | The answer follows that mode's format; the request carries only the mode's name |
+| Repos tab, Add and index | Stages shown in order (Cloning, Reading the code, Summarizing N of M, Grouping), then the symbol count and commit |
+| Repos tab, Refresh with no new commit | `Up to date at <commit>`, and no LLM calls |
+| Add a second repo while yours is indexing | Refused: you can start another when it finishes |
 | `/me/usage` | Your questions, tokens and cost for today |
 | Web UI | One repo's graph renders; a question lights the cited symbols and the path joining them; the answer shows formatted, with images removed and links as plain text |
 

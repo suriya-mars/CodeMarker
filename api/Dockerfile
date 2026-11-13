@@ -30,6 +30,9 @@ COPY . .
 # parser exploit should land in an unprivileged account. The repos mount is
 # read-only regardless.
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+# Git mirrors for pull request review, and repos cloned from a URL. Owned here so a
+# new named volume inherits the owner.
+RUN mkdir /mirrors /clones && chown app /mirrors /clones
 ENV PYTHONDONTWRITEBYTECODE=1
 USER app
 

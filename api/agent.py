@@ -162,6 +162,7 @@ def ask(
     token_budget = _env_int("AGENT_TOKEN_BUDGET", 150_000)
     deadline = time.monotonic() + _env_int("AGENT_TIMEOUT_S", 120)
     usage: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+                             "cache_read_tokens": 0, "cache_write_tokens": 0,
                              "by_model": {}}
     stopped: str | None = None
 
@@ -278,6 +279,10 @@ def _env_int(name: str, default: int) -> int:
 def _add(usage: dict[str, Any], resp: llm.LLMResponse) -> None:
     usage["input_tokens"] += resp.input_tokens
     usage["output_tokens"] += resp.output_tokens
+    # input_tokens counts cached input too, so budgets and quotas mean the same
+    # with or without the cache; these say how much of it the cache served
+    usage["cache_read_tokens"] = usage.get("cache_read_tokens", 0) + resp.cache_read_tokens
+    usage["cache_write_tokens"] = usage.get("cache_write_tokens", 0) + resp.cache_write_tokens
     usage["cost_usd"] = round(usage["cost_usd"] + resp.cost_usd, 6)
     if resp.model:
         m = usage["by_model"].setdefault(resp.model, {"input_tokens": 0, "output_tokens": 0})

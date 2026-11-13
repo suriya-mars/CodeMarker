@@ -303,8 +303,8 @@ def test_graph_repos_and_connect_against_a_live_graph(tmp_path, monkeypatch):
         indexer.index_repo(str(tmp_path / name), repo=name, stages=("parse",))
     try:
         c = _client(monkeypatch)
-        assert c.get("/repos").json() == [{"repo": "shop", "symbols": 5},
-                                          {"repo": "vault", "symbols": 2}]
+        assert [(r["repo"], r["symbols"]) for r in c.get("/repos").json()] == [
+            ("shop", 5), ("vault", 2)]
         g = c.get("/graph", params={"repo": "vault"}).json()
         assert {n["id"] for n in g["nodes"]} == {"vault_mod", "vault_mod.beta"}
         assert {(e["source"], e["target"], e["type"]) for e in g["edges"]} == {

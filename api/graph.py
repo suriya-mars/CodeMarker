@@ -76,6 +76,14 @@ SCHEMA_STATEMENTS = [
       FOR (c:Community) REQUIRE c.id IS UNIQUE
     """,
     """
+    CREATE CONSTRAINT community_summary_fingerprint IF NOT EXISTS
+      FOR (c:CommunitySummary) REQUIRE c.fingerprint IS UNIQUE
+    """,
+    """
+    CREATE CONSTRAINT summary_cache_key IF NOT EXISTS
+      FOR (c:SummaryCache) REQUIRE c.key IS UNIQUE
+    """,
+    """
     CREATE CONSTRAINT usage_quota_key IF NOT EXISTS
       FOR (q:UsageQuota) REQUIRE q.key IS UNIQUE
     """,

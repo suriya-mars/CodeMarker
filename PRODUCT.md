@@ -29,14 +29,17 @@ through the code that backs it, without their source going anywhere they did not
 stack, and the only thing that leaves it is the LLM call to the provider the customer
 chooses, on their own key. There are no third-party analytics, telemetry or guardrail
 services: guardrail models run inside the stack, and telemetry carries counts, never
-prompts or source.
+prompts or source. Pull request comments are opt-in and go only to the GitHub repo the code
+came from: symbol ids, signatures and one-line summaries, never source or diffs.
 
 ## Operating Context
 
 - **Ask:** a question goes to an agent that navigates the graph with read-only tools and
   cites the symbols it used; those symbols light up in the graph view.
-- **Review:** after a commit, a report lists changed symbols, everything upstream of them
+- **Review:** after a commit, a report (the Review tab, or the API) lists changed symbols, everything upstream of them
   with the path back to the change, the architectural areas touched, and risk flags.
+- **On a pull request:** a comment shows the same report for the branch, updated on each push,
+  and links to the Review tab in the web UI. It uses no LLM.
 - **Keep fresh:** the repo is re-indexed after merges; only changed code is re-summarized.
 - **In the editor:** engineers can reach the same graph tools from Claude Code over MCP.
 
@@ -50,6 +53,7 @@ prompts or source.
   explains them.
 - Vectorless by design: full-text search over LLM-written summaries plus graph traversal.
   No embeddings or vector database.
+- Impact reports in the web UI (Review tab) and as GitHub pull request comments.
 - Guardrails, per-user rate limits and daily token quotas, and estimated cost per user.
 - Each question is independent. Conversation memory was deliberately not built, because
   of cost.

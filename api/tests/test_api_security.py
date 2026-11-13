@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 
 import auth
 import impact
+import repo_jobs
 import quota
-import indexer
 
 ARN = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/explorer/abc123"
 TOKEN = "t" * 40  
@@ -44,9 +44,9 @@ def repos(tmp_path, monkeypatch):
     (tmp_path / "secret").mkdir()
     os.symlink(tmp_path / "secret", root / "escape")  # in the root, points out of it
     monkeypatch.setenv("REPOS_ROOT", str(root))
+    monkeypatch.setenv("CLONE_ROOT", str(tmp_path / "clones"))
     calls = []
-    monkeypatch.setattr(indexer, "index_repo",
-                        lambda path, repo="": calls.append((path, repo)) or {"ok": True})
+    monkeypatch.setattr(repo_jobs, "refresh", lambda name, user: calls.append(name))
     return root, calls
 
 
@@ -70,8 +70,8 @@ def test_index_rejects_symlink_escaping_the_root(monkeypatch, repos):
 def test_index_resolves_a_name_under_the_root(monkeypatch, repos):
     root, calls = repos
     c = _client(monkeypatch)
-    assert c.post("/index", json={"repo": "shop"}).status_code == 200
-    assert calls == [(str(root / "shop"), "shop")]
+    assert c.post("/index", json={"repo": "shop"}).status_code == 202  # a background job
+    assert calls == ["shop"]
     r = c.post("/index", json={"repo": "missing"})
     assert r.status_code == 404 and str(root) not in r.text  # never echo the path
 

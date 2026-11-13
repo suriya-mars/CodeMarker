@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,14 +20,21 @@ import auth
 import graph
 import guard
 import impact
-import indexer
+import modes
+import pr_review
 import quota
+import repo_jobs
 import telemetry
 import tools
 
 auth.check_config()  # fail at boot on a bad AUTH_MODE, never per request
 guard.check_config()  # likewise: never silently run without the ML guardrails
 guard.preload()
+pr_review.check_config()
+try:  # a job the previous process was running cannot finish now
+    repo_jobs.recover()
+except Exception as exc:  # noqa: BLE001 — the database may not be up yet
+    print(f"[repos] could not check for interrupted jobs: {exc}")
 # Every route requires a user; auth.require_user exempts only /health.
 app = FastAPI(title="RepoDigger", dependencies=[Depends(auth.require_user)])
 
@@ -52,30 +59,25 @@ if _cors:
 _REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
 
-def _repos_root() -> Path:
-    return Path(os.environ.get("REPOS_ROOT", "/repos")).resolve()
-
-
 def repo_dir(name: str) -> Path:
-    """Resolve a repo NAME to its directory under REPOS_ROOT, or raise.
-
-    The regex rejects separators and `..`; resolving and re-checking the parent
-    also rejects a symlink inside the root that points outside it. Errors never
-    echo the resolved path.
-    """
+    """Resolve a repo NAME to its directory, mounted (REPOS_ROOT) or cloned
+    (CLONE_ROOT), or raise. Names, never paths: a caller-supplied path would let
+    anyone walk, and then read back via get_definition, any directory the
+    container can see. Errors never echo the resolved path."""
     if not _REPO_NAME.match(name or ""):
         raise HTTPException(status_code=400, detail="repo must be a plain directory name")
-    root = _repos_root()
-    path = (root / name).resolve()
-    if path.parent != root:
-        raise HTTPException(status_code=400, detail="repo must be a directory under the repos root")
-    if not path.is_dir():
+    path = repo_jobs.locate(name)
+    if path is None:
+        root = repo_jobs.repos_root()
+        if (root / name).exists() or (repo_jobs.clone_root() / name).exists():
+            raise HTTPException(status_code=400,
+                                detail="repo must be a directory under the repos root")
         raise HTTPException(status_code=404, detail=f"no repo named {name!r}")
     return path
 
 
 def _scrub(msg: str) -> str:
-    return msg.replace(str(_repos_root()), "<repos>")
+    return repo_jobs.scrub(msg)
 
 
 # A question is resent on every agent turn, so its length multiplies into input
@@ -89,11 +91,26 @@ class IndexRequest(BaseModel):
     repo: str  # a directory name under REPOS_ROOT — not a path
 
 
+class AddRepoRequest(BaseModel):
+    url: str = Field(max_length=300)
+
+
 class AskRequest(BaseModel):
     question: str = Field(max_length=_MAX_QUESTION)
     # Bind the agent's tools to one indexed repo. Server-side, so text injected
     # into the code cannot redirect the agent to read a different repo.
     repo: str = ""
+    # A NAME, never a prompt: the system prompts live server-side (modes.py).
+    mode: Literal["explore", "refactor", "security", "impact"] = "explore"
+
+
+class RefreshRequest(BaseModel):
+    analyze: bool = False  # blast radius mode: analyse the change before re-indexing
+
+
+NO_CHANGES = ("No new symbols or code to check blast radius. Select Blast radius mode, then "
+              "refresh the repository after new commits arrive: the change is analysed before "
+              "the graph is updated.")
 
 
 class ImpactRequest(BaseModel):
@@ -143,13 +160,56 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/index")
-def index(req: IndexRequest) -> dict[str, Any]:
-    path = repo_dir(req.repo)
+def _queue(start, *args) -> None:
     try:
-        return indexer.index_repo(str(path), repo=req.repo)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=_scrub(str(exc))) from exc
+        start(*args)
+    except repo_jobs.Busy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except repo_jobs.Exists as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# Indexing pays for a summary of every new or changed symbol, so these routes carry
+# the same limits as the routes that answer questions.
+@app.post("/index", status_code=202, dependencies=_LLM_GUARDS)
+def index(req: IndexRequest, request: Request) -> dict[str, str]:
+    """Re-index a mounted repo, as a background job (see GET /repos)."""
+    repo_dir(req.repo)
+    _queue(repo_jobs.refresh, req.repo, auth.user_key(request))
+    return {"repo": req.repo, "status": "queued"}
+
+
+@app.post("/repos", status_code=202, dependencies=_LLM_GUARDS)
+def add_repo(req: AddRepoRequest, request: Request) -> dict[str, str]:
+    """Clone a repository from its https URL, then index it, as a background job."""
+    try:
+        name = repo_jobs.add(req.url, auth.user_key(request))
+    except (repo_jobs.Busy, repo_jobs.Exists) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"repo": name, "status": "queued"}
+
+
+@app.post("/repos/{name}/refresh", status_code=202, dependencies=_LLM_GUARDS)
+def refresh_repo(name: str, request: Request,
+                 req: RefreshRequest | None = None) -> dict[str, str]:
+    """Fetch the latest commit and re-index if there is one, as a background job.
+    With `analyze`, the change is analysed for blast radius before re-indexing."""
+    if not _REPO_NAME.match(name):
+        raise HTTPException(status_code=400, detail="repo must be a plain directory name")
+    analyze = bool(req and req.analyze)
+    try:
+        repo_jobs.refresh(name, auth.user_key(request), analyze=analyze)
+    except repo_jobs.Busy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"repo": name, "status": "queued"}
 
 
 @app.post("/ask", dependencies=_LLM_GUARDS)
@@ -158,10 +218,29 @@ def ask(req: AskRequest, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="question is required")
     if req.repo and not _REPO_NAME.match(req.repo):
         raise HTTPException(status_code=400, detail="repo must be a plain directory name")
+    if req.mode == modes.IMPACT:
+        if not req.repo:
+            raise HTTPException(status_code=400, detail="choose a repository")
+        report = repo_jobs.pending_impact(req.repo)
+        if report is None:
+            raise HTTPException(status_code=409, detail=NO_CHANGES)
+        if not report.changed:
+            raise HTTPException(status_code=409, detail=(
+                "The latest refresh changed no code symbols, so there is no blast radius."))
+        result = impact.ask(report, req.question)
+        quota.charge(request, result.get("usage"))
+        with tools.scoped(req.repo):
+            try:
+                result["path"] = tools.connect(result.get("cited_ids") or [])
+            except Exception:  # noqa: BLE001 — a paid-for answer outlives a failed highlight
+                result["path"] = {"nodes": [], "edges": []}
+        return result
+    mode = modes.MODES[req.mode]
     # Step budget scales with the indexed repo (scale.py); missing profile is fine.
     prof = graph.get_profile()
     with tools.scoped(req.repo):
-        result = agent.ask(req.question, max_steps=prof.get("max_agent_steps"))
+        result = agent.ask(req.question, max_steps=prof.get("max_agent_steps"),
+                           system=mode.system, tool_names=mode.tool_names)
         quota.charge(request, result.get("usage"))
         try:
             result["path"] = tools.connect(result.get("cited_ids") or [])
@@ -171,12 +250,15 @@ def ask(req: AskRequest, request: Request) -> dict[str, Any]:
     return result
 
 
-@app.post("/impact", dependencies=_LLM_GUARDS)
+@app.post("/impact", dependencies=[Depends(auth.rate_limit)])
 def impact_report(req: ImpactRequest, request: Request) -> dict[str, Any]:
     """Impact of a commit range. The report is deterministic and free; the LLM
     runs only if a question is given (or `explain`), and reads the report's
-    compact digest rather than the source."""
+    compact digest rather than the source. So only that case needs token quota,
+    and a user who has spent theirs can still get the report."""
     path = repo_dir(req.repo)
+    if req.question or req.explain:
+        quota.guard(request)
     try:
         report = impact.analyze(str(path), base=req.base, head=req.head,
                                 repo=req.repo, depth=req.depth)
@@ -193,6 +275,12 @@ def impact_report(req: ImpactRequest, request: Request) -> dict[str, Any]:
 @app.get("/impact")
 def impact_list(repo: str = "", limit: int = 20) -> list[dict[str, Any]]:
     return impact.list_reports(repo, limit)
+
+
+@app.get("/impact/range")
+def impact_range(repo: str) -> dict[str, Any]:
+    """What can be compared in this repo, for the web UI. No LLM call."""
+    return impact.range_status(str(repo_dir(repo)), repo)
 
 
 @app.get("/impact/{report_id}")
@@ -212,6 +300,31 @@ def impact_ask(report_id: str, req: ImpactAskRequest, request: Request) -> dict[
     result = impact.ask(report, req.question)
     quota.charge(request, result.get("usage"))
     return result
+
+
+@app.post("/webhooks/github")
+async def github_webhook(request: Request) -> dict[str, str]:
+    """GitHub pull request events. Answers fast, because GitHub gives up after 10
+    seconds, and does the work on pr_review's queue.
+
+    Not found unless a webhook secret is configured. Nothing in the body is read until
+    the signature proves GitHub sent it; the size limit runs first because checking a
+    signature needs the whole body in memory.
+    """
+    if not pr_review.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > pr_review.MAX_WEBHOOK_BYTES:
+            raise HTTPException(status_code=413, detail="payload too large")
+    if not pr_review.verify_signature(body, request.headers.get("x-hub-signature-256", "")):
+        raise HTTPException(status_code=401, detail="invalid signature")
+    try:
+        status = pr_review.handle_event(request.headers.get("x-github-event", ""), body)
+    except pr_review.QueueFull as exc:
+        raise HTTPException(status_code=503, detail="review queue is full") from exc
+    return {"status": status}
 
 
 # What "Open code" serves: classes and functions, never whole files.
@@ -248,14 +361,10 @@ def symbol_source(id: str, repo: str = "") -> dict[str, Any]:
 
 
 @app.get("/repos")
-def list_repos() -> list[dict[str, Any]]:
-    """The indexed repos, for the web UI's repo scope."""
-    return graph._run(
-        """
-        MATCH (s:Symbol) WHERE s.repo IS NOT NULL
-        RETURN s.repo AS repo, count(*) AS symbols ORDER BY repo
-        """
-    )
+def list_repos(request: Request) -> list[dict[str, Any]]:
+    """Every repo with its index state: symbols, commit, and any job queued or
+    running. The web UI polls this while a job is active."""
+    return repo_jobs.list_repos(auth.user_key(request))
 
 
 @app.get("/graph")

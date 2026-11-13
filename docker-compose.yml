@@ -43,6 +43,8 @@ services:
       ALB_ARN: "${ALB_ARN:-}"
       CORS_ORIGINS: "${CORS_ORIGINS:-}"   # empty = no cross-origin access
       MAX_FILE_BYTES: "${MAX_FILE_BYTES:-1000000}"  # larger files are skipped, not parsed
+      INDEX_SKIP_GENERATED: "${INDEX_SKIP_GENERATED:-1}"  # parsing/__init__.py: skip generated code
+      INDEX_EXCLUDE: "${INDEX_EXCLUDE:-}"                # extra globs to leave out
       LLM_RATE_PER_MIN: "${LLM_RATE_PER_MIN:-20}"   # per user, on routes that call the LLM
       DAILY_TOKEN_QUOTA: "${DAILY_TOKEN_QUOTA:-2000000}"   # per user per UTC day, stored in Neo4j
       AGENT_TOKEN_BUDGET: "${AGENT_TOKEN_BUDGET:-150000}"  # per question, input + output
@@ -53,9 +55,26 @@ services:
       GUARD_MODE: "${GUARD_MODE:-required}"
       GUARD_THRESHOLD: "${GUARD_THRESHOLD:-0.99}"
       REPOS_ROOT: "/repos"
+      # repo_jobs.py: repositories added by URL in the Repos tab
+      CLONE_ROOT: "/clones"
+      CLONE_ALLOWED_HOSTS: "${CLONE_ALLOWED_HOSTS:-github.com,gitlab.com,bitbucket.org}"
+      CLONE_MAX_MB: "${CLONE_MAX_MB:-1000}"
+      INDEX_MAX_SYMBOLS: "${INDEX_MAX_SYMBOLS:-50000}"
+      CLONE_TOKEN: "${CLONE_TOKEN:-}"
+      CLONE_TOKEN_HOST: "${CLONE_TOKEN_HOST:-github.com}"
+      # pr_review.py: comment on pull requests. Off unless the webhook secret is set.
+      GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
+      GITHUB_REPOS: "${GITHUB_REPOS:-}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY:-}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      GITHUB_PR_FORKS: "${GITHUB_PR_FORKS:-0}"
+      PUBLIC_URL: "${PUBLIC_URL:-}"
     volumes:
       - ./api:/app
       - ./repos:/repos:ro          # target codebases, read-only
+      - pr-mirrors:/mirrors        # git history fetched for pull request review
+      - cloned-repos:/clones       # repositories added by URL
     depends_on:
       neo4j:
         condition: service_healthy
@@ -80,3 +99,5 @@ services:
 
 volumes:
   neo4j-data:
+  pr-mirrors:
+  cloned-repos:

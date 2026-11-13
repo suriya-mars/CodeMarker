@@ -16,6 +16,7 @@ import pytest
 
 import graph
 import indexer
+import llm
 import summarize
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "webforms_app")
@@ -98,6 +99,7 @@ def test_failed_summary_is_not_poisoned_with_the_symbol_name(monkeypatch):
     monkeypatch.setattr(summarize, "llm", type("X", (), {
         "complete": staticmethod(lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))),
         "SUMMARY_MODEL": "m",
+        "summary_model": staticmethod(lambda: "m"),
     }))
     indexer.write_summaries(workers=2, progress_every=10_000)
     assert len(indexer.pending_summaries()) == 19, "failures must remain retryable"
@@ -108,7 +110,7 @@ def test_summaries_are_idempotent(monkeypatch):
     indexer.index_repo(FIXTURE, stages=("parse",))
     indexer.write_summaries(workers=4, progress_every=10_000)
     again = indexer.write_summaries(workers=4, progress_every=10_000)
-    assert again == {"summarized": 0, "failed": 0, "pending": 0}
+    assert again == {"summarized": 0, "reused": 0, "failed": 0, "pending": 0}
 
 
 def test_community_stage_runs_without_reparsing(monkeypatch):
@@ -231,3 +233,264 @@ def test_community_rerun_leaves_no_stale_communities(monkeypatch):
     ) == [{"s": "a", "c": "new"}]
     rows = graph._run("MATCH (s:Symbol {id: 'b'}) RETURN s.community_id AS c")
     assert rows == [{"c": None}]
+
+
+# --- community summary cache ----------------------------------------------------
+
+
+def _community_world():
+    graph._run("CREATE (:Symbol {id: 'a'}), (:Symbol {id: 'b'}), (:Symbol {id: 'c'})")
+    return {"a": "reads the file", "b": "parses it", "c": "writes it"}
+
+
+def _paid(monkeypatch):
+    calls = []
+
+    def fake(name, summaries):
+        calls.append(summaries)
+        return f"cluster of {len(summaries)}"
+
+    monkeypatch.setattr(summarize, "summarize_community", fake)
+    return calls
+
+
+def test_unchanged_community_is_not_paid_for_twice(monkeypatch):
+    calls = _paid(monkeypatch)
+    s = _community_world()
+    first = indexer.write_communities({"a": "c0", "b": "c0"}, {"c0": ["a", "b"]}, s)
+    again = indexer.write_communities({"a": "c0", "b": "c0"}, {"c0": ["a", "b"]}, s)
+    assert len(calls) == 1
+    assert first["community_summaries_generated"] == 1
+    assert again == {"community_summaries_generated": 0, "community_summaries_reused": 1,
+                     "community_summaries_failed": 0}
+    assert graph._run("MATCH (c:Community) RETURN c.summary AS s") == [{"s": "cluster of 2"}]
+
+
+def test_leiden_renumbering_still_hits_the_cache(monkeypatch):
+    calls = _paid(monkeypatch)
+    s = _community_world()
+    indexer.write_communities({"a": "c0", "b": "c0"}, {"c0": ["a", "b"]}, s)
+    indexer.write_communities({"a": "c9", "b": "c9"}, {"c9": ["b", "a"]}, s)
+    assert len(calls) == 1
+    assert graph._run("MATCH (c:Community) RETURN c.id AS i, c.summary AS s") == [
+        {"i": "c9", "s": "cluster of 2"}]
+
+
+@pytest.mark.parametrize(("members", "summaries"), [
+    (["a", "b", "c"], {}),  # a member joined
+    (["a"], {}),  # a member left
+    (["a", "b"], {"b": "now does something else"}),  # a member's code changed
+])
+def test_a_real_change_regenerates(monkeypatch, members, summaries):
+    calls = _paid(monkeypatch)
+    s = _community_world()
+    indexer.write_communities({"a": "c0", "b": "c0"}, {"c0": ["a", "b"]}, s)
+    indexer.write_communities({m: "c0" for m in members}, {"c0": members}, s | summaries)
+    assert len(calls) == 2
+
+
+def test_only_the_changed_community_regenerates(monkeypatch):
+    calls = _paid(monkeypatch)
+    s = _community_world()
+    both = {"c0": ["a", "b"], "c1": ["c"]}
+    indexer.write_communities({"a": "c0", "b": "c0", "c": "c1"}, both, s)
+    stats = indexer.write_communities({"a": "c0", "b": "c0", "c": "c1"}, both, s | {"c": "new"})
+    assert len(calls) == 3
+    assert stats["community_summaries_generated"] == 1
+    assert stats["community_summaries_reused"] == 1
+
+
+def test_a_failed_summary_is_retried_not_cached(monkeypatch):
+    s = _community_world()
+    monkeypatch.setattr(summarize, "summarize_community", lambda name, m: name)  # the fallback
+    stats = indexer.write_communities({"a": "c0"}, {"c0": ["a"]}, s)
+    assert stats["community_summaries_failed"] == 1
+    assert graph._run("MATCH (c:CommunitySummary) RETURN count(c) AS n") == [{"n": 0}]
+
+    calls = _paid(monkeypatch)
+    stats = indexer.write_communities({"a": "c0"}, {"c0": ["a"]}, s)
+    assert len(calls) == 1
+    assert stats["community_summaries_generated"] == 1
+
+
+def test_a_crash_keeps_what_was_paid_for_and_the_old_communities(monkeypatch):
+    s = _community_world()
+    calls = _paid(monkeypatch)
+    indexer.write_communities({"a": "old"}, {"old": ["a"]}, s)
+
+    def dies_on_second(name, summaries):
+        calls.append(summaries)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+        return "paid for"
+
+    monkeypatch.setattr(summarize, "summarize_community", dies_on_second)
+    new = {"c0": ["b"], "c1": ["c"]}
+    with pytest.raises(KeyboardInterrupt):
+        indexer.write_communities({"b": "c0", "c": "c1"}, new, s)
+    # the graph still shows the previous communities
+    assert graph._run("MATCH (c:Community) RETURN c.id AS id") == [{"id": "old"}]
+
+    calls.clear()
+    monkeypatch.setattr(summarize, "summarize_community",
+                        lambda n, m: calls.append(m) or "resumed")
+    stats = indexer.write_communities({"b": "c0", "c": "c1"}, new, s)
+    assert len(calls) == 1  # only the one never paid for
+    assert stats["community_summaries_reused"] == 1
+
+
+def test_a_member_past_the_prompt_cap_does_not_force_a_new_summary(monkeypatch):
+    calls = _paid(monkeypatch)
+    ids = [f"m{i:03d}" for i in range(summarize._MAX_COMMUNITY_MEMBERS + 5)]
+    graph._run("UNWIND $ids AS i CREATE (:Symbol {id: i})", ids=ids)
+    text = {i: f"does {i}" for i in ids}
+    indexer.write_communities({i: "c0" for i in ids}, {"c0": ids}, text)
+    indexer.write_communities({i: "c0" for i in ids}, {"c0": ids}, text | {ids[-1]: "changed"})
+    assert len(calls) == 1
+    # the count is still right, because it does not come from the summary
+    grown = [*ids, "m999"]
+    graph._run("CREATE (:Symbol {id: 'm999'})")
+    indexer.write_communities({i: "c0" for i in grown}, {"c0": grown}, text)
+    assert graph._run("MATCH (c:Community) RETURN c.member_count AS n")[0]["n"] == len(grown)
+
+
+def test_unused_cache_entries_expire(monkeypatch):
+    _paid(monkeypatch)
+    s = _community_world()
+    graph._run("CREATE (:CommunitySummary {fingerprint: 'old', summary: 'x', last_used: 1.0})")
+    graph._run("CREATE (:CommunitySummary {fingerprint: 'recent', summary: 'y', last_used: $t})",
+               t=__import__("time").time() - 86400)
+    indexer.write_communities({"a": "c0"}, {"c0": ["a"]}, s)
+    left = {r["f"] for r in graph._run("MATCH (c:CommunitySummary) RETURN c.fingerprint AS f")}
+    assert "old" not in left and "recent" in left
+
+
+# --- summary cache: identical input is never paid for twice ---------------------
+
+
+def _counting(monkeypatch):
+    calls = []
+    monkeypatch.setattr(summarize, "summarize_symbol",
+                        lambda s: calls.append(s.id) or f"does {s.name}")
+    return calls
+
+
+def _write(tmp_path, rel, text):
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+BODY = "def load(path):\n    return open(path).read()\n"
+
+
+def test_the_same_code_in_another_repo_is_not_summarized_again(tmp_path, monkeypatch):
+    calls = _counting(monkeypatch)
+    _write(tmp_path, "one/io_util.py", BODY)
+    _write(tmp_path, "two/pkg/io_util.py", BODY)  # same file, different id
+    indexer.index_repo(str(tmp_path / "one"), repo="one", stages=("parse", "summarize"))
+    first = len(calls)
+    stats = indexer.index_repo(str(tmp_path / "two"), repo="two", stages=("parse", "summarize"))
+    assert first == 2 and len(calls) == first  # file + function, then nothing new
+    assert stats["reused"] == 2 and stats["summarized"] == 0
+    rows = graph._run("MATCH (s:Symbol {repo: 'two'}) RETURN s.summary AS s ORDER BY s")
+    assert [r["s"] for r in rows] == ["does io_util.py", "does load"]  # written by repo one's run
+
+
+def test_a_moved_file_reuses_its_summaries(tmp_path, monkeypatch):
+    calls = _counting(monkeypatch)
+    _write(tmp_path, "r/old/io_util.py", BODY)
+    indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    calls.clear()
+    (tmp_path / "r" / "old" / "io_util.py").rename(tmp_path / "r" / "io_util.py")
+    stats = indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    assert calls == [] and stats["reused"] == 2
+
+
+def test_changed_code_is_summarized_again(tmp_path, monkeypatch):
+    calls = _counting(monkeypatch)
+    _write(tmp_path, "r/io_util.py", BODY)
+    indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    calls.clear()
+    _write(tmp_path, "r/io_util.py", BODY.replace(".read()", ".read().strip()"))
+    indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    assert "io_util.load" in calls
+
+
+def test_identical_symbols_in_one_run_share_one_call(tmp_path, monkeypatch):
+    calls = _counting(monkeypatch)
+    for d in ("a", "b", "c"):
+        _write(tmp_path, f"r/{d}/io_util.py", BODY)
+    stats = indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    assert len(calls) == 2  # one file summary, one function summary, for all three copies
+    assert stats["reused"] == 4
+    assert graph._run("MATCH (s:Symbol {repo: 'r'}) WHERE s.summary IS NULL RETURN count(s) AS n"
+                      ) == [{"n": 0}]
+
+
+def test_a_different_model_regenerates(tmp_path, monkeypatch):
+    calls = _counting(monkeypatch)
+    _write(tmp_path, "one/io_util.py", BODY)
+    _write(tmp_path, "two/pkg/io_util.py", BODY)  # same file, different id
+    indexer.index_repo(str(tmp_path / "one"), repo="one", stages=("parse", "summarize"))
+    monkeypatch.setattr(llm, "summary_model", lambda: "a-better-model")
+    calls.clear()
+    indexer.index_repo(str(tmp_path / "two"), repo="two", stages=("parse", "summarize"))
+    assert len(calls) == 2
+
+
+def test_a_new_prompt_version_regenerates(tmp_path, monkeypatch):
+    calls = _counting(monkeypatch)
+    _write(tmp_path, "one/io_util.py", BODY)
+    _write(tmp_path, "two/pkg/io_util.py", BODY)  # same file, different id
+    indexer.index_repo(str(tmp_path / "one"), repo="one", stages=("parse", "summarize"))
+    monkeypatch.setattr(summarize, "PROMPT_VERSION", "2")
+    calls.clear()
+    indexer.index_repo(str(tmp_path / "two"), repo="two", stages=("parse", "summarize"))
+    assert len(calls) == 2
+
+
+def test_a_failed_summary_is_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(summarize, "summarize_symbol", lambda s: None)
+    _write(tmp_path, "r/io_util.py", BODY)
+    indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    assert graph._run("MATCH (c:SummaryCache) RETURN count(c) AS n") == [{"n": 0}]
+    calls = _counting(monkeypatch)
+    indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    assert len(calls) == 2
+
+
+def test_a_flagged_summary_stays_flagged_when_reused(tmp_path, monkeypatch):
+    monkeypatch.setattr(summarize, "summarize_symbol", lambda s: f"{summarize.FLAG} reads a file")
+    _write(tmp_path, "one/io_util.py", BODY)
+    _write(tmp_path, "two/pkg/io_util.py", BODY)  # same file, different id
+    indexer.index_repo(str(tmp_path / "one"), repo="one", stages=("parse", "summarize"))
+    indexer.index_repo(str(tmp_path / "two"), repo="two", stages=("parse", "summarize"))
+    rows = graph._run("MATCH (s:Symbol {repo: 'two'}) RETURN s.summary AS s")
+    assert all(r["s"].startswith("[flagged") for r in rows)
+
+
+def test_the_key_ignores_location_but_not_what_the_prompt_shows():
+    from parsing import Symbol
+
+    def sym(**kw):
+        base = dict(id="a.f", kind="function", name="f", path="a.py", start_line=1, end_line=2,
+                    language="python", signature="f(x)", source=BODY)
+        return Symbol(**(base | kw))
+
+    key = summarize.summary_key
+    assert key(sym()) == key(sym(id="b.f", path="b/a.py", start_line=40, end_line=41))
+    assert key(sym()) != key(sym(signature="f(x, y)"))
+    assert key(sym()) != key(sym(source=BODY + "# changed\n"))
+    assert key(sym()) != key(sym(kind="method"))
+    # beyond what the prompt sends, a difference does not matter
+    long = "x = 1\n" * 1000
+    assert key(sym(source=long + "a")) == key(sym(source=long + "b"))
+
+
+def test_unused_summary_cache_entries_expire(tmp_path, monkeypatch):
+    _counting(monkeypatch)
+    graph._run("CREATE (:SummaryCache {key: 'old', summary: 'x', last_used: 1.0})")
+    _write(tmp_path, "r/io_util.py", BODY)
+    indexer.index_repo(str(tmp_path / "r"), repo="r", stages=("parse", "summarize"))
+    assert graph._run("MATCH (c:SummaryCache {key: 'old'}) RETURN count(c) AS n") == [{"n": 0}]

@@ -1,28 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { fetchGraph, fetchRepos, fetchSource, ask } from "./api.js";
+import { fetchGraph, fetchReport, fetchRepos, fetchSource, ask, refreshRepo } from "./api.js";
 import { applyTheme, loadTheme, readTokens } from "./themes.js";
 import ThemeMenu from "./ThemeMenu.jsx";
 import CoreLog, { HAS_CODE, SymbolDetail, buildCore } from "./CoreLog.jsx";
 import CodeView from "./CodeView.jsx";
+import Answer from "./Answer.jsx";
+import { ImpactLog, ReviewPanel, reportPath } from "./Impact.jsx";
+import Repos from "./Repos.jsx";
+import { BlastStatus, ModePicker, modeById } from "./Modes.jsx";
 
 cytoscape.use(fcose);
 
-// Answers quote repository text, so an answer is untrusted content. Raw HTML stays
-// inert (react-markdown does not render it), images are dropped so nothing can fetch
-// a URL just by being displayed, and links become plain text showing where they
-// point, so injected text cannot carry data out or send a reader somewhere.
-const MARKDOWN_PLUGINS = [remarkGfm];
-const NO_IMAGES = ["img"];
-const MARKDOWN_COMPONENTS = {
-  a({ children, href }) {
-    const text = String(children);
-    return <span>{text}{href && href !== text ? ` (${href})` : ""}</span>;
-  },
-};
+// A pull request comment links here: ?repo=<name>&report=<id>
+const LINKED = new URLSearchParams(window.location.search);
+const LINKED_REPORT = /^[0-9a-f]{6,32}$/.test(LINKED.get("report") || "") ? LINKED.get("report") : null;
 
 function buildElements(graph) {
   const ids = new Set(graph.nodes.map((n) => n.id));
@@ -122,6 +115,20 @@ export default function App() {
   const [selected, setSelected] = useState(null);
   const [code, setCode] = useState(null); // { loading } | { error } | { source... }
   const [codeOpen, setCodeOpen] = useState(false);
+  const [mode, setMode] = useState(LINKED_REPORT ? "review" : "ask");
+  const [opened, setOpened] = useState(null); // { report, markdown }
+  const [reportError, setReportError] = useState("");
+  const [cyVersion, setCyVersion] = useState(0);
+  const [askMode, setAskModeState] = useState(() => {
+    try {
+      return modeById(localStorage.getItem("repodigger.mode") || "explore").id;
+    } catch {
+      return "explore";
+    }
+  });
+  const [blastError, setBlastError] = useState("");
+  const [graphVersion, setGraphVersion] = useState(0); // bumped when the open repo is re-indexed
+  const indexedAt = useRef({});
   const endRef = useRef(null);
   const graphEl = useRef(null);
 
@@ -130,15 +137,73 @@ export default function App() {
     cyRef.current?.style(graphStyle());
   }, [theme]);
 
-  useEffect(() => {
-    fetchRepos()
+  function setAskMode(id) {
+    setAskModeState(id);
+    setBlastError("");
+    try {
+      localStorage.setItem("repodigger.mode", id);
+    } catch {
+      // a remembered mode is a convenience; the default works without it
+    }
+  }
+
+  async function refreshAndAnalyse() {
+    setBlastError("");
+    try {
+      await refreshRepo(repo, true);
+      loadRepos();
+    } catch (e) {
+      setBlastError(e.message);
+    }
+  }
+
+  // Repos that have a graph to show. One being indexed for the first time has none yet.
+  const ready = repos.filter((r) => r.symbols > 0);
+  const anyActive = repos.some((r) => r.status === "queued" || r.status === "running");
+
+  function loadRepos(first = false) {
+    return fetchRepos()
       .then((list) => {
         setRepos(list);
-        if (list.length > 0) setRepo(list[0].repo);
-        else setStatus("No repositories indexed yet. Run the indexer, then reload this page.");
+        const shown = list.filter((r) => r.symbols > 0);
+        // a repo that finished re-indexing while open is redrawn
+        list.forEach((r) => {
+          const before = indexedAt.current[r.repo];
+          if (before && r.indexed_at && r.indexed_at !== before && r.repo === repoRef.current) {
+            setGraphVersion((v) => v + 1);
+          }
+          indexedAt.current[r.repo] = r.indexed_at;
+        });
+        setRepo((current) => {
+          if (current && shown.some((r) => r.repo === current)) return current;
+          const linked = shown.find((r) => r.repo === LINKED.get("repo"));
+          return (linked || shown[0])?.repo || null;
+        });
+        if (shown.length === 0) {
+          setStatus("No repository is indexed yet. Add one in the Repos tab.");
+          if (first && !LINKED_REPORT) setMode("repos");
+        }
       })
       .catch((e) => setStatus(`${e.message}. Check the API is running, then reload.`));
-  }, []);
+  }
+
+  useEffect(() => {
+    loadRepos(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // While anything is being indexed, follow it.
+  useEffect(() => {
+    if (!anyActive) return undefined;
+    const timer = setInterval(() => loadRepos(), 3000);
+    return () => clearInterval(timer);
+  }, [anyActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (LINKED_REPORT) openReport(LINKED_REPORT);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const repoRef = useRef(repo);
+  repoRef.current = repo;
 
   useEffect(() => {
     if (!repo) return undefined;
@@ -172,6 +237,7 @@ export default function App() {
           if (evt.target === cy) clearPick();
         });
         cyRef.current = cy;
+        setCyVersion((v) => v + 1);
       })
       .catch((e) => setStatus(`${e.message}. Reload to try again.`));
     return () => {
@@ -179,7 +245,7 @@ export default function App() {
       cyRef.current?.destroy();
       cyRef.current = null;
     };
-  }, [repo]);
+  }, [repo, graphVersion]);
 
   useEffect(() => {
     if (!busy) return undefined;
@@ -214,9 +280,37 @@ export default function App() {
     };
   }, [codeOpen, selected?.id, repo]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function describe(id) {
+  // The graph shows what was asked about, or the open report, whichever tab is up.
+  useEffect(() => {
+    if (!cyRef.current) return;
+    clearPick();
+    if (mode === "review" && opened?.report.repo === repo) {
+      const { ids, path } = reportPath(opened.report);
+      highlightPath(ids, path);
+    } else if (mode === "ask" && active) {
+      highlightPath(active.cited, active.path);
+    } else {
+      highlightPath([]);
+    }
+  }, [mode, opened, cyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function openReport(id) {
+    setReportError("");
+    try {
+      showReport(await fetchReport(id));
+    } catch (e) {
+      setReportError(e.message);
+    }
+  }
+
+  function showReport(res) {
+    if (repos.length > 0 && res.report.repo !== repo) setRepo(res.report.repo);
+    setOpened(res);
+  }
+
+  function describe(id, known) {
     const n = cyRef.current?.getElementById(id);
-    if (!n || n.empty()) return { name: id, kind: "file", summary: "", path: "" };
+    if (!n || n.empty()) return { name: id, kind: "file", summary: "", path: "", ...known };
     return { name: n.data("label"), kind: n.data("kind"), summary: n.data("summary"), path: n.data("path") };
   }
 
@@ -231,7 +325,7 @@ export default function App() {
     setSelected(null);
   }
 
-  function pick(id) {
+  function pick(id, known) {
     const cy = cyRef.current;
     if (!cy) return;
     const n = cy.getElementById(id);
@@ -245,7 +339,7 @@ export default function App() {
         cy.animate({ center: { eles: n }, duration: 200 });
       }
     }
-    setSelected({ id, ...describe(id) });
+    setSelected({ id, ...describe(id, known), indexed: known?.indexed });
     // stacked layout: the graph may be off screen when a band is tapped
     if (narrow()) graphEl.current?.scrollIntoView({ block: "start" });
   }
@@ -330,6 +424,7 @@ export default function App() {
   function onRepoChange(e) {
     setMessages([]); // earlier answers describe the previous repo
     setActive(null);
+    setOpened(null);
     setSelected(null);
     setRepo(e.target.value);
   }
@@ -337,14 +432,15 @@ export default function App() {
   async function onSubmit(e) {
     e.preventDefault();
     const q = question.trim();
-    if (!q || busy || !repo) return;
-    setMessages((m) => [...m, { role: "user", text: q }]);
+    if (!q || busy || !repo || !canAsk) return;
+    const asked = askMode;
+    setMessages((m) => [...m, { role: "user", text: q, mode: asked }]);
     setQuestion("");
     setBusy(true);
     setSelected(null);
     const started = Date.now();
     try {
-      const res = await ask(q, repo);
+      const res = await ask(q, repo, asked);
       const answer = {
         role: "assistant",
         text: res.answer,
@@ -360,6 +456,11 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  const repoRow = repos.find((r) => r.repo === repo);
+  const currentMode = modeById(askMode);
+  // blast radius answers only from an analysed refresh; without one there is nothing to ask
+  const canAsk = askMode !== "impact" || Boolean(repoRow?.blast);
 
   const core = useMemo(
     () => (active ? buildCore(active.cited, active.path, describe) : null),
@@ -387,58 +488,120 @@ export default function App() {
       </main>
       <div className="log-column">
         {selected && <SymbolDetail symbol={selected} onClose={clearPick} onOpenCode={() => setCodeOpen(true)} />}
-        <CoreLog
-          core={core}
-          spend={active?.spend}
-          busy={busy}
-          elapsed={elapsed}
-          counts={stats.counts}
-          repo={repo}
-          selectedId={selected?.id}
-          onPick={pick}
-          onWholeRepo={showWholeRepo}
-        />
+        {mode === "review" && opened ? (
+          <ImpactLog
+            key={opened.report.id}
+            report={opened.report}
+            selectedId={selected?.id}
+            onPick={pick}
+            onClose={() => setOpened(null)}
+          />
+        ) : (
+          <CoreLog
+            core={mode === "ask" ? core : null}
+            spend={active?.spend}
+            busy={mode === "ask" && busy}
+            elapsed={elapsed}
+            counts={stats.counts}
+            repo={repo}
+            selectedId={selected?.id}
+            onPick={pick}
+            onWholeRepo={showWholeRepo}
+            hint={mode === "review" ? "Open a report and its blast radius stacks here by hops from the change, with the same route lit in the graph." : ""}
+          />
+        )}
       </div>
       <section className="panel" aria-label="Questions">
         <header className="panel-head">
           <h1>RepoDigger</h1>
           <div className="panel-controls">
-            {repos.length > 1 && (
+            {ready.length > 1 && (
               <select className="control" aria-label="Repository" value={repo || ""} onChange={onRepoChange} disabled={busy}>
-                {repos.map((r) => (
+                {ready.map((r) => (
                   <option key={r.repo} value={r.repo}>{r.repo}</option>
                 ))}
               </select>
             )}
-            {repos.length === 1 && <span className="repo-name">{repos[0].repo}</span>}
+            {ready.length === 1 && <span className="repo-name">{ready[0].repo}</span>}
             <ThemeMenu theme={theme} onChange={setTheme} />
           </div>
         </header>
+        <div className="tabs" role="tablist" aria-label="What to do">
+          {[["ask", "Ask"], ["review", "Review"], ["repos", "Repos"]].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`tab-${id}`}
+              aria-selected={mode === id}
+              aria-controls={`panel-${id}`}
+              className={mode === id ? "on" : ""}
+              onClick={() => setMode(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* all stay mounted, so switching tabs never loses an answer */}
+        <div className="tab-panel" id="panel-repos" role="tabpanel" aria-labelledby="tab-repos" hidden={mode !== "repos"}>
+          <Repos
+            repos={repos}
+            current={repo}
+            onOpen={(name) => {
+              selectRepo(name);
+              setMode("ask");
+            }}
+            onChanged={() => loadRepos()}
+            analyze={askMode === "impact"}
+          />
+        </div>
+        <div className="tab-panel" id="panel-review" role="tabpanel" aria-labelledby="tab-review" hidden={mode !== "review"}>
+          <ReviewPanel
+            repo={repo}
+            opened={opened}
+            error={reportError}
+            onOpen={openReport}
+            onShow={showReport}
+            onBack={() => setOpened(null)}
+            onPick={pick}
+          />
+        </div>
+        <div className="tab-panel" id="panel-ask" role="tabpanel" aria-labelledby="tab-ask" hidden={mode !== "ask"}>
+        <div className="mode-bar">
+          <ModePicker mode={askMode} onChange={setAskMode} disabled={busy} />
+          <small className="mode-hint">{currentMode.hint}</small>
+        </div>
         <div className="messages">
+          {askMode === "impact" && repo && (
+            <BlastStatus
+              row={repoRow}
+              repo={repo}
+              onRefresh={refreshAndAnalyse}
+              refreshError={blastError}
+              onOpenReport={(id) => {
+                openReport(id);
+                setMode("review");
+              }}
+            />
+          )}
           {messages.length === 0 && (
-            <p className="intro">
-              Ask how something in {repo || "the codebase"} works, for example “how does
-              authentication work?”. The answer is traced through the graph, so you can check it.
-            </p>
+            <p className="intro">{currentMode.intro(repo || "the codebase")}</p>
           )}
           {messages.map((m, i) => (
             <div key={i} className={`msg ${m.role}`}>
               {m.role === "assistant" ? (
                 <>
-                  <div className="md">
-                    <Markdown
-                      remarkPlugins={MARKDOWN_PLUGINS}
-                      disallowedElements={NO_IMAGES}
-                      components={MARKDOWN_COMPONENTS}
-                    >
-                      {m.text}
-                    </Markdown>
-                  </div>
+                  <Answer text={m.text} />
                   {m !== active && m.cited.length > 0 && (
                     <button type="button" className="link" onClick={() => showAnswer(m)}>
                       Show this path
                     </button>
                   )}
+                </>
+              ) : m.role === "user" ? (
+                <>
+                  {m.mode && m.mode !== "explore" && <small className="msg-mode">{modeById(m.mode).label}</small>}
+                  {m.text}
                 </>
               ) : (
                 m.text
@@ -451,14 +614,15 @@ export default function App() {
           <input
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={repo ? `Ask about ${repo}…` : "Index a repository first"}
-            aria-label="Your question"
-            disabled={busy || !repo}
+            placeholder={repo ? currentMode.placeholder(repo) : "Index a repository first"}
+            aria-label={`Your question, ${currentMode.label} mode`}
+            disabled={busy || !repo || !canAsk}
           />
-          <button type="submit" className="ask" disabled={busy || !repo || !question.trim()}>
+          <button type="submit" className="ask" disabled={busy || !repo || !canAsk || !question.trim()}>
             {busy ? "Asking…" : "Ask"}
           </button>
         </form>
+        </div>
       </section>
     </div>
   );

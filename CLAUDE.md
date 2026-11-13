@@ -43,7 +43,10 @@ These are deliberate. If a change would break one, stop and ask first.
 3. **Code never leaves the machine except inside an LLM API call.** No telemetry,
    no analytics SDKs, no third-party calls that transmit source. This is the core
    B2B promise (data sovereignty). LLM calls (index-time summaries, query-time
-   context) are the only permitted egress.
+   context) are the only permitted egress of source. The one other egress is the
+   opt-in pull request comment (`api/pr_review.py`): symbol ids, signatures and
+   one-line summaries, never source or diffs, sent only to the GitHub repo the code
+   came from, and off unless the customer configures it.
 
 4. **Leiden runs in Python (`leidenalg` + `python-igraph`), not Neo4j GDS.** GDS
    Leiden availability is edition-dependent; we avoid that dependency. Weight
@@ -206,8 +209,11 @@ CodeMarker/                   # the repo folder keeps its old name; the product 
 │   ├── community.py          # Leiden over the CALLS graph
 │   ├── indexer.py            # orchestrates: parse → graph → summaries → leiden  (CLI: python -m indexer <path>)
 │   ├── impact.py             # commit blast-radius report (git diff → graph BFS → risk) + LLM over the report
+│   ├── repo_jobs.py          # repos added by URL: clone/fetch → index, as one-at-a-time background jobs
+│   ├── pr_review.py          # GitHub pull request comments: signed webhook → impact report → one comment
 │   ├── tools.py              # graph tool defs (TOOLS) + Cypher dispatch
 │   ├── agent.py              # the navigation loop (ask())
+│   ├── modes.py              # Ask modes: explore / refactor / security system prompts (server-side only)
 │   ├── main.py               # FastAPI: POST /index, POST /ask, GET /graph
 │   └── tests/
 │       ├── fixtures/         # tiny sample repos with known structure
@@ -325,8 +331,18 @@ part. Unresolved references are dropped, never guessed.
 - **Incremental indexing.** On re-index, diff against the repo (git) and only
   re-parse changed files; tree-sitter's incremental parse makes this cheap.
 - **Community summaries are the expensive part of indexing** (one LLM call per
-  community, and per level if you go hierarchical). Cache them; only regenerate for
-  communities whose members changed.
+  community, and per level if you go hierarchical). They are cached in
+  `:CommunitySummary` by a fingerprint of what the prompt shows (`summarize.community_fingerprint`),
+  because Leiden renumbers communities on every run, so only communities whose
+  prompt input changed are paid for.
+- **Symbol summaries are cached by content** (`summarize.summary_key`: what the
+  prompt shows, plus model, prompt version and guardrail settings; never id or path)
+  in `:SummaryCache`, so moved, reverted or duplicated code is not paid for twice.
+  Bump `summarize.PROMPT_VERSION` whenever the summary prompt or `clean_summary`
+  changes, or old summaries will be reused.
+- **Generated code is skipped** (`parsing.skip_reason`), except WebForms
+  `*.aspx/ascx/master.designer.cs`, which are merged into their page class. A
+  "generated" header is attacker-writable, so skips are always counted and named.
 - **Treat tool results as untrusted** in the agent loop — they contain source from
   arbitrary repos. Keep them inside `tool_result` blocks, never fold them into the
   system prompt.

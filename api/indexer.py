@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from typing import Any
@@ -141,7 +142,7 @@ def write_edges(edges: list[Edge], *, run_id: str = "") -> None:
             graph._run(cypher, rows=batch, run_id=run_id)
 
 
-def pending_summaries(limit: int | None = None) -> list[Symbol]:
+def pending_summaries(limit: int | None = None, repo: str = "") -> list[Symbol]:
     """Symbols still missing a summary, read back from the graph.
 
     Reading the work queue from Neo4j rather than from the in-memory symbol list
@@ -152,12 +153,13 @@ def pending_summaries(limit: int | None = None) -> list[Symbol]:
     rows = graph._run(
         f"""
         MATCH (s:Symbol)
-        WHERE s.summary IS NULL OR s.summary = ''
+        WHERE (s.summary IS NULL OR s.summary = '') AND ($repo = '' OR s.repo = $repo)
         RETURN s.id AS id, s.kind AS kind, s.name AS name, s.path AS path,
                s.language AS language, s.signature AS signature,
                s.source AS source, s.start_line AS start_line, s.end_line AS end_line
         {f'LIMIT {int(limit)}' if limit else ''}
-        """
+        """,
+        repo=repo,
     )
     return [
         Symbol(
@@ -170,60 +172,119 @@ def pending_summaries(limit: int | None = None) -> list[Symbol]:
     ]
 
 
+_SUMMARY_CACHE_DAYS = 30
+
+
 def _flush_summaries(rows: list[dict]) -> None:
-    if rows:
+    """Write summaries to their symbols, and remember each by its summary key."""
+    if not rows:
+        return
+    graph._run(
+        """
+        UNWIND $rows AS row
+        MATCH (s:Symbol {id: row.id})
+        SET s.summary = row.summary
+        """,
+        rows=rows,
+    )
+    keyed = list({r["key"]: {"key": r["key"], "summary": r["summary"]}
+                  for r in rows if r.get("key")}.values())
+    if keyed:
         graph._run(
             """
             UNWIND $rows AS row
-            MATCH (s:Symbol {id: row.id})
-            SET s.summary = row.summary
+            MERGE (c:SummaryCache {key: row.key})
+            SET c.summary = row.summary, c.last_used = $now
             """,
-            rows=rows,
+            rows=keyed, now=time.time(),
         )
 
 
-def write_summaries(workers: int = 8, *, progress_every: int = 500) -> dict[str, int]:
+def _cached_summaries(keys: list[str]) -> dict[str, str]:
+    if not keys:
+        return {}
+    rows = graph._run(
+        "MATCH (c:SummaryCache) WHERE c.key IN $keys RETURN c.key AS key, c.summary AS summary",
+        keys=keys,
+    )
+    return {r["key"]: r["summary"] for r in rows}
+
+
+def _prune_summary_cache() -> None:
+    """Entries are kept a while after their code disappears, because code that was
+    deleted or moved often comes back (a revert, a branch merged later)."""
+    graph._run("MATCH (c:SummaryCache) WHERE c.last_used < $cutoff DELETE c",
+               cutoff=time.time() - _SUMMARY_CACHE_DAYS * 86400)
+
+
+def write_summaries(workers: int = 8, *, progress_every: int = 500, repo: str = "",
+                    on_progress: Callable[[int, int], None] | None = None) -> dict[str, int]:
     """Summarise every symbol still missing a summary, in parallel.
 
-    Results are flushed in batches as they complete, so a crash loses at most one
-    batch — never the whole run. Failures are left pending and retried by simply
-    running this again.
+    Identical input is never paid for twice (summarize.summary_key): a summary
+    already in the cache is reused, and symbols with the same input in this run
+    share one call. Results are flushed in batches as they complete, so a crash
+    loses at most one batch, never the whole run. Failures are left pending and
+    retried by simply running this again; they are never cached.
     """
-    todo = pending_summaries()
+    todo = pending_summaries(repo=repo)
     total = len(todo)
     if not total:
         print("[summarize] nothing pending")
-        return {"summarized": 0, "failed": 0, "pending": 0}
+        return {"summarized": 0, "reused": 0, "failed": 0, "pending": 0}
+    step = max(1, total // 50)  # about 50 progress updates, however large the repo
 
-    print(f"[summarize] {total:,} pending, {workers} workers")
+    groups: dict[str, list[Symbol]] = {}
+    for sym in todo:
+        groups.setdefault(summarize.summary_key(sym), []).append(sym)
+    known = _cached_summaries(list(groups))
+    reused_rows = [{"id": sym.id, "summary": known[key], "key": key}
+                   for key in known for sym in groups.pop(key)]
+    for i in range(0, len(reused_rows), _BATCH):
+        _flush_summaries(reused_rows[i:i + _BATCH])
+    reused = len(reused_rows)
+
+    calls = len(groups)
+    print(f"[summarize] {total:,} pending: {reused:,} from the cache, "
+          f"{calls:,} to summarize ({workers} workers)")
     done = failed = 0
+    processed = reused  # symbols with a summary decided, cached or not
     buffer: list[dict] = []
     started = time.time()
+    if on_progress and reused:
+        on_progress(reused, total)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(summarize.summarize_symbol, s): s for s in todo}
+        futures = {pool.submit(summarize.summarize_symbol, members[0]): (key, members)
+                   for key, members in groups.items()}
         for fut in as_completed(futures):
-            sym = futures[fut]
+            key, members = futures[fut]
             try:
                 text = fut.result()
             except Exception as exc:  # noqa: BLE001
-                print(f"[summarize] FAILED {sym.id}: {exc}")
+                print(f"[summarize] FAILED {members[0].id}: {exc}")
                 text = None
             if text:
-                buffer.append({"id": sym.id, "summary": text})
+                buffer += [{"id": m.id, "summary": text, "key": key} for m in members]
                 done += 1
+                reused += len(members) - 1  # same input elsewhere in this run: no extra call
             else:
-                failed += 1
+                failed += len(members)
             if len(buffer) >= _BATCH:
                 _flush_summaries(buffer)
                 buffer = []
-            if (done + failed) % progress_every == 0:
-                _report(done + failed, total, started)
+            before, processed = processed, processed + len(members)
+            if processed // progress_every > before // progress_every:
+                _report(processed, total, started)
+            if on_progress and processed // step > before // step:
+                on_progress(processed, total)
     _flush_summaries(buffer)
+    _prune_summary_cache()
+    _report(processed, total, started)
 
-    _report(done + failed, total, started)
-    print(f"[summarize] done: {done:,} written, {failed:,} failed (rerun to retry)")
-    return {"summarized": done, "failed": failed, "pending": failed}
+    print(f"[summarize] done: {done:,} summarized, {reused:,} reused, "
+          f"{failed:,} failed (rerun to retry)")
+    return {"summarized": done, "reused": reused, "failed": failed, "pending": failed}
 
 
 def _report(seen: int, total: int, started: float) -> None:
@@ -237,13 +298,99 @@ def _report(seen: int, total: int, started: float) -> None:
     )
 
 
+_COMMUNITY_CACHE_DAYS = 30
+
+
+def _cached_community_summaries(fingerprints: list[str]) -> dict[str, str]:
+    rows = graph._run(
+        """
+        MATCH (c:CommunitySummary) WHERE c.fingerprint IN $fingerprints
+        RETURN c.fingerprint AS fingerprint, c.summary AS summary
+        """,
+        fingerprints=fingerprints,
+    )
+    return {r["fingerprint"]: r["summary"] for r in rows}
+
+
+def _store_community_summary(fingerprint: str, summary: str) -> None:
+    graph._run(
+        """
+        MERGE (c:CommunitySummary {fingerprint: $fingerprint})
+        SET c.summary = $summary, c.last_used = $now
+        """,
+        fingerprint=fingerprint, summary=summary, now=time.time(),
+    )
+
+
+def _touch_community_summaries(fingerprints: list[str]) -> None:
+    """Keep entries in use, and drop those no community has matched in a while.
+    Old entries are kept for a time because a community can split and later return."""
+    now = time.time()
+    graph._run(
+        """
+        MATCH (c:CommunitySummary) WHERE c.fingerprint IN $fingerprints
+        SET c.last_used = $now
+        """,
+        fingerprints=fingerprints, now=now,
+    )
+    graph._run(
+        "MATCH (c:CommunitySummary) WHERE c.last_used < $cutoff DELETE c",
+        cutoff=now - _COMMUNITY_CACHE_DAYS * 86400,
+    )
+
+
+def summarize_communities(
+    communities: dict[str, list[str]], summaries_by_symbol: dict[str, str]
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Summarise only the communities whose prompt input changed.
+
+    Each new summary is stored the moment it is paid for, so a crash partway loses
+    nothing and the rerun continues from there. A failed call is never cached: the
+    next run retries it. Runs before any destructive write in write_communities, so
+    a crash here leaves the previous communities intact.
+    """
+    shown = {cid: summarize.community_prompt_members(members, summaries_by_symbol)
+             for cid, members in communities.items()}
+    fingerprints = {cid: summarize.community_fingerprint(s) for cid, s in shown.items()}
+    known = _cached_community_summaries(sorted(set(fingerprints.values())))
+    rows: list[dict[str, Any]] = []
+    generated = reused = failed = 0
+    for cid, members in communities.items():
+        name = f"Community {cid}"
+        fingerprint = fingerprints[cid]
+        summary = known.get(fingerprint)
+        if summary is not None:
+            reused += 1
+        else:
+            summary = summarize.summarize_community(name, [text for _, text in shown[cid]])
+            if summary == name:  # the fallback fired: the LLM call failed
+                failed += 1
+            else:
+                generated += 1
+                known[fingerprint] = summary  # identical communities pay once
+                _store_community_summary(fingerprint, summary)
+        rows.append({"id": cid, "name": name, "summary": summary, "member_count": len(members)})
+    _touch_community_summaries(sorted(set(fingerprints.values())))
+    print(f"[index] community summaries: {generated:,} generated, {reused:,} reused, "
+          f"{failed:,} failed")
+    if failed:
+        print(
+            f"[index] WARNING: {failed}/{len(communities)} community summaries failed; "
+            f"list_communities will be degraded. Rerun: --stage community"
+        )
+    return rows, {"community_summaries_generated": generated,
+                  "community_summaries_reused": reused,
+                  "community_summaries_failed": failed}
+
+
 def write_communities(
     assignments: dict[str, str],
     communities: dict[str, list[str]],
     summaries_by_symbol: dict[str, str],
-) -> None:
+) -> dict[str, int]:
     if not communities:
-        return
+        return {}
+    community_rows, stats = summarize_communities(communities, summaries_by_symbol)
     # Leiden renumbers on every run, and MERGE only adds: without this, symbols keep
     # memberships from earlier runs and deleted code leaves stale communities listed.
     graph._run("MATCH (:Symbol)-[r:IN_COMMUNITY]->(:Community) DELETE r")
@@ -260,23 +407,6 @@ def write_communities(
             SET s.community_id = row.cid
             """,
             rows=batch,
-        )
-
-    community_rows = []
-    failed = 0
-    for cid, members in communities.items():
-        member_summaries = [summaries_by_symbol.get(m, m) for m in members]
-        name = f"Community {cid}"
-        summary = summarize.summarize_community(name, member_summaries)
-        if summary == name:  # the fallback fired — the LLM call failed
-            failed += 1
-        community_rows.append(
-            {"id": cid, "name": name, "summary": summary, "member_count": len(members)}
-        )
-    if failed:
-        print(
-            f"[index] WARNING: {failed}/{len(communities)} community summaries failed; "
-            f"list_communities will be degraded. Rerun: --stage community"
         )
 
     graph._run(
@@ -298,6 +428,7 @@ def write_communities(
             """,
             rows=batch,
         )
+    return stats
 
 
 def write_profile(prof) -> None:
@@ -360,6 +491,8 @@ def index_repo(
     fresh: bool = False,
     stages: tuple[str, ...] = STAGES,
     workers: int | None = None,
+    progress: Callable[..., None] | None = None,
+    max_symbols: int | None = None,
 ) -> dict[str, Any]:
     """Index a repo. Every stage is idempotent and independently runnable.
 
@@ -370,8 +503,14 @@ def index_repo(
 
     `fresh=True` wipes first — the ONLY destructive path, and it is opt-in
     precisely so a crash at hour 15 does not leave you with nothing.
+
+    `progress(stage, done, total)` reports where a background job is (repo_jobs).
+    `max_symbols` refuses a repo larger than that BEFORE anything is written or any
+    summary is paid for.
     """
     result: dict[str, Any] = {}
+    report = progress or (lambda *a, **k: None)
+    repo_name = repo or os.path.basename(os.path.normpath(repo_path))
     print("[index] schema setup")
     graph.setup_schema()
 
@@ -380,7 +519,7 @@ def index_repo(
         graph.clear_graph()
 
     if "parse" in stages:
-        repo_name = repo or os.path.basename(os.path.normpath(repo_path))
+        report("parsing")
         run_id = uuid.uuid4().hex
         print(f"[index] parsing {repo_path}  (repo={repo_name})")
         t0 = time.time()
@@ -388,8 +527,15 @@ def index_repo(
         symbols, edges = parse_repo(repo_path, stats)
         print(f"[index] {len(symbols):,} symbols, {len(edges):,} edges "
               f"in {time.time()-t0:.0f}s")
+        if max_symbols and len(symbols) > max_symbols:
+            raise RuntimeError(
+                f"The repository has {len(symbols):,} classes and functions, over the "
+                f"limit of {max_symbols:,} (INDEX_MAX_SYMBOLS). Indexing it would pay "
+                f"for a summary of each one.")
         write_symbols(symbols, repo=repo_name, run_id=run_id)
         write_edges(edges, run_id=run_id)
+        if stats["skipped"]:
+            print(f"[index] skipped {len(stats['skipped']):,} generated or excluded file(s)")
         if stats["failed_paths"]:
             print(f"[index] {len(stats['failed_paths'])} file(s) failed to parse; "
                   f"keeping their previously indexed symbols")
@@ -397,7 +543,8 @@ def index_repo(
         if removed:
             print(f"[index] removed {removed:,} symbols for code that no longer exists")
         record_commit(repo_name, repo_path)
-        result |= {"symbols": len(symbols), "edges": len(edges), "removed": removed}
+        result |= {"symbols": len(symbols), "edges": len(edges), "removed": removed,
+                   "skipped_files": len(stats["skipped"])}
         del symbols, edges  # release before the long LLM stage
 
     if "summarize" in stages:
@@ -406,9 +553,12 @@ def index_repo(
         n_sym, _ = counts()
         prof = scale.derive(n_sym, 0)
         print("[index] summarizing symbols (LLM)")
-        result |= write_summaries(workers or prof.summary_workers)
+        report("summarizing")
+        result |= write_summaries(workers or prof.summary_workers, repo=repo_name,
+                                  on_progress=lambda done, total: report("summarizing", done, total))
 
     if "community" in stages:
+        report("grouping")
         edges = load_call_edges()
         n_sym, n_edge = counts()
         prof = scale.derive(n_sym, n_edge)
@@ -418,7 +568,7 @@ def index_repo(
             [], edges, target_communities=prof.fine_communities
         )
         print(f"[index] {len(communities):,} communities")
-        write_communities(assignments, communities, load_summaries())
+        result |= write_communities(assignments, communities, load_summaries())
         write_profile(prof)
         result |= {"communities": len(communities), "tier": prof.tier}
 
