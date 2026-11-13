@@ -205,7 +205,7 @@ def test_reindex_drops_removed_calls_and_keeps_unparseable_files(tmp_path, monke
     monkeypatch.setenv("NEO4J_PASSWORD", PASSWORD)
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     (tmp_path / "m.py").write_text("def b():\n    return 1\n\n\ndef a():\n    return b()\n")
     (tmp_path / "other.py").write_text("def keep():\n    return 1\n")
     calls = "MATCH (:Symbol {id:'m.a'})-[r:CALLS]->(:Symbol {id:'m.b'}) RETURN count(r) AS n"
@@ -226,5 +226,5 @@ def test_reindex_drops_removed_calls_and_keeps_unparseable_files(tmp_path, monke
         kept = graph._run("MATCH (s:Symbol {id:'other.keep'}) RETURN count(s) AS n")
         assert kept[0]["n"] == 1
     finally:
-        graph.clear_graph()
+        graph.wipe_test_database()
         graph.close_driver()

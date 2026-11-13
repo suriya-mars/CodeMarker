@@ -59,7 +59,7 @@ def indexed_graph():
         yield stats
     finally:
         summarize.summarize_symbol, summarize.summarize_community = real
-        graph.clear_graph()
+        graph.wipe_test_database()
         graph.close_driver()
 
 

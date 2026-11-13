@@ -515,8 +515,9 @@ def index_repo(
     graph.setup_schema()
 
     if fresh:
-        print("[index] fresh=True -> wiping existing graph")
-        graph.clear_graph()
+        removed = graph.clear_code_graph(repo_name)
+        print(f"[index] fresh=True -> deleted {removed:,} symbols of {repo_name}; "
+              f"other repos and user data are kept")
 
     if "parse" in stages:
         report("parsing")
@@ -587,7 +588,8 @@ def main() -> None:
     )
     ap.add_argument("repo_path")
     ap.add_argument("--fresh", action="store_true",
-                    help="WIPE the graph before indexing (destructive; off by default)")
+                    help="delete THIS repo's code graph before indexing (off by default); "
+                         "other repos and user data are kept")
     ap.add_argument("--stage", action="append", choices=STAGES, dest="stages",
                     help="run only this stage; repeatable. Default: all")
     ap.add_argument("--repo", default="",

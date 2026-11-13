@@ -145,7 +145,7 @@ def world(tmp_path, monkeypatch):
     os.environ["NEO4J_PASSWORD"] = PASSWORD
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     monkeypatch.setenv("REPOS_ROOT", str(tmp_path / "repos"))
     monkeypatch.setenv("CLONE_ROOT", str(tmp_path / "clones"))
     (tmp_path / "repos").mkdir()
@@ -442,3 +442,26 @@ def test_analysis_runs_even_if_some_summaries_failed(world, monkeypatch):
     _push(world, V2, "change")
     repo_jobs.refresh("shop", "alice", analyze=True)
     assert repo_jobs.pending_impact("shop") is not None
+
+
+@needs_neo4j
+def test_after_a_restore_the_existing_clone_is_reused_not_duplicated(world):
+    """The database is restored from an older backup, or rebuilt, but the clone is
+    still on disk. Adding the same URL again picks the clone back up."""
+    repo_jobs.add(world["url"], "alice")
+    graph.wipe_test_database()  # what a restore from before the repo was added looks like
+    assert repo_jobs.add(world["url"], "alice") == "shop"
+    assert _row("shop")["symbols"] == 3
+
+
+@needs_neo4j
+def test_a_clone_of_a_different_url_is_never_taken_over(world, tmp_path):
+    other = tmp_path / "remote" / "other" / "shop.git"
+    other.mkdir(parents=True)
+    _git(other, "init", "-q", "-b", "main")
+    (other / "x.py").write_text("def x():\n    return 1\n")
+    _git(other, "add", ".")
+    _git(other, "commit", "-qm", "x")
+    repo_jobs.add(world["url"], "alice")
+    graph.wipe_test_database()
+    assert repo_jobs.add(f"file://{other}", "alice") == "acme-shop"

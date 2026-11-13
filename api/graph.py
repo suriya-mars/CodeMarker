@@ -121,6 +121,32 @@ def get_profile() -> dict[str, Any]:
         return {}
 
 
-def clear_graph() -> None:
-    """Wipe all nodes/edges. Used before a full (non-incremental) re-index."""
+def clear_code_graph(repo: str) -> int:
+    """Delete ONE repo's code graph: its symbols with their edges, and its indexed
+    commit. Used by a full (`--fresh`) re-index. Returns the symbols deleted.
+
+    Everything else stays: other repos, user data (usage, quotas, conversations,
+    repo records, impact reports) and the summary caches. Communities are recomputed
+    by the community stage. Deleted in batches, so a large repo does not need one
+    huge transaction."""
+    if not repo:
+        raise ValueError("clear_code_graph needs a repo name")
+    n = _run("MATCH (s:Symbol {repo: $repo}) RETURN count(s) AS n", repo=repo)[0]["n"]
+    _run(
+        """
+        MATCH (s:Symbol {repo: $repo})
+        CALL (s) { DETACH DELETE s } IN TRANSACTIONS OF 5000 ROWS
+        """,
+        repo=repo,
+    )
+    _run("MATCH (r:RepoState {repo: $repo}) DELETE r", repo=repo)
+    return n
+
+
+def wipe_test_database() -> None:
+    """Delete EVERYTHING. Tests only: it refuses unless this process is connected to
+    the test database, so it can never empty a real one by mistake."""
+    test_uri = os.environ.get("NEO4J_TEST_URI")
+    if not test_uri or os.environ.get("NEO4J_URI") != test_uri:
+        raise RuntimeError("refusing to wipe: NEO4J_URI is not the test database (NEO4J_TEST_URI)")
     _run("MATCH (n) DETACH DELETE n")

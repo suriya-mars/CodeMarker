@@ -80,7 +80,7 @@ def db():
     os.environ["NEO4J_PASSWORD"] = PASSWORD
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     yield
     graph.close_driver()
 

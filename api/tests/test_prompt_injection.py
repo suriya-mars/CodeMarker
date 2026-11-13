@@ -249,7 +249,7 @@ def test_scoped_tools_cannot_read_another_repo(tmp_path, monkeypatch):
     monkeypatch.setenv("NEO4J_PASSWORD", PASSWORD)
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     for name, code in (("shop", "def alpha():\n    return 1\n"),
                        ("vault", "def beta():\n    return 'secret'\n")):
         (tmp_path / name).mkdir()
@@ -261,7 +261,7 @@ def test_scoped_tools_cannot_read_another_repo(tmp_path, monkeypatch):
             assert "error" not in tools.get_definition("shop_mod.alpha")
             assert "error" in tools.get_definition("vault_mod.beta")  # other repo: hidden
     finally:
-        graph.clear_graph()
+        graph.wipe_test_database()
         graph.close_driver()
 
 
@@ -291,7 +291,7 @@ def test_graph_repos_and_connect_against_a_live_graph(tmp_path, monkeypatch):
     monkeypatch.setenv("NEO4J_PASSWORD", os.environ["NEO4J_TEST_PASSWORD"])
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     (tmp_path / "shop").mkdir()
     (tmp_path / "shop" / "shop_mod.py").write_text(
         "def low():\n    return 1\n\n\ndef mid():\n    return low()\n\n\n"
@@ -317,7 +317,7 @@ def test_graph_repos_and_connect_against_a_live_graph(tmp_path, monkeypatch):
         with tools.scoped("shop"):  # a pair spanning repos has no route, and is out of scope
             assert tools.connect(["shop_mod.low", "vault_mod.beta"])["edges"] == []
     finally:
-        graph.clear_graph()
+        graph.wipe_test_database()
         graph.close_driver()
 
 
@@ -365,7 +365,7 @@ def test_symbol_source_against_a_live_graph(tmp_path, monkeypatch):
     monkeypatch.setenv("NEO4J_PASSWORD", os.environ["NEO4J_TEST_PASSWORD"])
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     (tmp_path / "shop").mkdir()
     (tmp_path / "shop" / "shop_mod.py").write_text(
         "class Cart:\n    def total(self):\n        return 1\n\n\ndef helper():\n    return 2\n"
@@ -380,5 +380,5 @@ def test_symbol_source_against_a_live_graph(tmp_path, monkeypatch):
         assert c.get("/symbol/source", params={"id": "shop_mod", "repo": "shop"}).status_code == 404
         assert c.get("/symbol/source", params={"id": "shop_mod.helper", "repo": "vault"}).status_code == 404
     finally:
-        graph.clear_graph()
+        graph.wipe_test_database()
         graph.close_driver()

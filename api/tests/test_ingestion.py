@@ -47,9 +47,9 @@ def clean_graph():
     os.environ["NEO4J_PASSWORD"] = PASSWORD
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     yield
-    graph.clear_graph()
+    graph.wipe_test_database()
 
 
 def test_parse_stage_runs_alone_and_leaves_everything_pending():
@@ -132,8 +132,14 @@ def test_indexing_is_not_destructive_by_default(monkeypatch):
     indexer.index_repo(FIXTURE, stages=("parse",))          # default: no wipe
     assert graph._run("MATCH (s:Symbol {id:'sentinel'}) RETURN count(s) AS n")[0]["n"] == 1
 
+    # fresh clears THIS repo's code graph only: its own leftovers go, another
+    # repo's symbols stay
+    repo = os.path.basename(FIXTURE)
+    graph._run("MATCH (s:Symbol {id:'sentinel'}) SET s.repo = $repo", repo=repo)
+    graph._run("CREATE (:Symbol {id: 'other.repo.sym', repo: 'other'})")
     indexer.index_repo(FIXTURE, stages=("parse",), fresh=True)
     assert graph._run("MATCH (s:Symbol {id:'sentinel'}) RETURN count(s) AS n")[0]["n"] == 0
+    assert graph._run("MATCH (s:Symbol {repo:'other'}) RETURN count(s) AS n")[0]["n"] == 1
 
 
 # --- re-indexing after a teammate pushes ------------------------------------

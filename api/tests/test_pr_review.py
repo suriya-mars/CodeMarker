@@ -385,7 +385,7 @@ def world(tmp_path, monkeypatch, github, configured):
     os.environ["NEO4J_PASSWORD"] = PASSWORD
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
     monkeypatch.setattr(summarize, "summarize_symbol", lambda s: f"summary of {s.name}")
     monkeypatch.setattr(summarize, "summarize_community", lambda n, m: f"cluster {n}")
 

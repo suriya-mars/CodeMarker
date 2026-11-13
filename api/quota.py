@@ -22,6 +22,14 @@ own limit:
     python -m quota set bob@example.com 0           # unlimited
     python -m quota clear alice@example.com         # back to DAILY_TOKEN_QUOTA
     python -m quota list                            # overrides + today's usage
+
+Privacy: usage records carry the user's email, so they are kept for
+USAGE_RETENTION_DAYS (default 400, about 13 months) and then deleted, once a day.
+To remove everything stored about one person (a leaver, or a deletion request):
+
+    python -m quota forget alice@example.com          # shows what would go
+    python -m quota forget alice@example.com --yes    # deletes it
+    python -m quota prune                             # apply retention now
 """
 
 from __future__ import annotations
@@ -83,6 +91,38 @@ def guard(request: Request) -> None:
         )
 
 
+def retention_days() -> int:
+    return int(os.environ.get("USAGE_RETENTION_DAYS", "400"))
+
+
+def prune(days: int | None = None) -> int:
+    """Delete usage records older than the retention period. Returns how many."""
+    days = retention_days() if days is None else days
+    if days <= 0:
+        return 0  # 0 = keep forever
+    cutoff = (dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)).isoformat()
+    rows = graph._run(
+        "MATCH (q:UsageQuota) WHERE q.day < $cutoff DELETE q RETURN count(*) AS n",
+        cutoff=cutoff,
+    )
+    return rows[0]["n"] if rows else 0
+
+
+_pruned_on: str | None = None
+
+
+def _prune_daily() -> None:
+    """Retention without a scheduler: the first charge of each UTC day prunes."""
+    global _pruned_on
+    today = dt.datetime.now(dt.UTC).date().isoformat()
+    if _pruned_on != today:
+        _pruned_on = today
+        try:
+            prune()
+        except Exception as exc:  # noqa: BLE001 — retention must never fail a request
+            print(f"[quota] retention prune failed: {exc}")
+
+
 def charge(request: Request, usage: dict | None) -> None:
     """Record one request's usage against the caller, for today (UTC).
 
@@ -116,6 +156,7 @@ def charge(request: Request, usage: dict | None) -> None:
         tokens_out=tokens_out,
         cost=float(usage.get("cost_usd", 0.0)),
     )
+    _prune_daily()
 
 
 def usage_report(days: int = 30, user: str | None = None) -> list[dict]:
@@ -193,6 +234,66 @@ def overview() -> list[dict]:
     )
 
 
+def forget(who: str, *, dry_run: bool = True) -> dict:
+    """Everything stored about one person, found by login subject or email, and
+    deleted unless `dry_run`. Returns what was (or would be) removed.
+
+    Deleted: usage records, quota overrides, remembered conversations. Repositories
+    they added are shared with everyone, so they stay, with the person's name removed.
+    Not covered here: the Cognito account, and backups and snapshots, which expire on
+    their own schedule (see the CLI output)."""
+    who = who.strip()
+    key = who.lower() if "@" in who else who
+    # A person is known by a login subject (Cognito's opaque id) AND an email; usage
+    # records hold both, so either one finds the other.
+    rows = graph._run(
+        """
+        MATCH (q:UsageQuota) WHERE q.user = $key OR q.email = $key
+        RETURN collect(DISTINCT q.user) AS subs, collect(DISTINCT q.email) AS emails
+        """,
+        key=key,
+    )
+    subs = {key} | set(rows[0]["subs"] if rows else [])
+    emails = ({key} if "@" in key else set()) | {e for e in (rows[0]["emails"] if rows else []) if e}
+    ids = sorted(subs | emails)
+    found = graph._run(
+        """
+        CALL () { MATCH (q:UsageQuota) WHERE q.user IN $ids OR q.email IN $ids
+                  RETURN count(q) AS usage }
+        CALL () { MATCH (u:UserQuota) WHERE u.user IN $ids RETURN count(u) AS overrides }
+        CALL () { MATCH (s:Session) WHERE s.user IN $ids
+                  OPTIONAL MATCH (s)-[:HAS_TURN]->(t:Turn)
+                  RETURN count(DISTINCT s) AS conversations, count(t) AS turns }
+        CALL () { MATCH (r:Repo) WHERE r.added_by IN $ids OR r.job_user IN $ids
+                  RETURN count(r) AS repos }
+        RETURN usage, overrides, conversations, turns, repos
+        """,
+        ids=ids,
+    )[0]
+    result = {"identities": ids, **found, "deleted": not dry_run}
+    if dry_run:
+        return result
+    graph._run("MATCH (q:UsageQuota) WHERE q.user IN $ids OR q.email IN $ids DELETE q", ids=ids)
+    graph._run("MATCH (u:UserQuota) WHERE u.user IN $ids DELETE u", ids=ids)
+    graph._run(
+        """
+        MATCH (s:Session) WHERE s.user IN $ids
+        OPTIONAL MATCH (s)-[:HAS_TURN]->(t:Turn)
+        DETACH DELETE s, t
+        """,
+        ids=ids,
+    )
+    graph._run(
+        """
+        MATCH (r:Repo) WHERE r.added_by IN $ids OR r.job_user IN $ids
+        SET r.added_by = CASE WHEN r.added_by IN $ids THEN 'a removed user' ELSE r.added_by END,
+            r.job_user = CASE WHEN r.job_user IN $ids THEN 'a removed user' ELSE r.job_user END
+        """,
+        ids=ids,
+    )
+    return result
+
+
 def main() -> None:
     import argparse
 
@@ -208,11 +309,39 @@ def main() -> None:
     s_rep = sub.add_parser("report", help="tokens and cost per user")
     s_rep.add_argument("--days", type=int, default=30)
     s_rep.add_argument("--user", help="one user's daily breakdown (subject or email)")
+    s_forget = sub.add_parser("forget", help="delete everything stored about one person")
+    s_forget.add_argument("user", help="login subject or email")
+    s_forget.add_argument("--yes", action="store_true", help="really delete (default: only show)")
+    s_prune = sub.add_parser("prune", help="delete usage records past retention now")
+    s_prune.add_argument("--days", type=int, default=None,
+                         help="override USAGE_RETENTION_DAYS for this run")
     args = ap.parse_args()
     if args.cmd == "set" and args.daily_tokens < 0:
         ap.error("daily_tokens must be >= 0 (0 = unlimited)")
 
     graph.setup_schema()
+    if args.cmd == "forget":
+        r = forget(args.user, dry_run=not args.yes)
+        verb = "Deleted" if r["deleted"] else "Would delete"
+        print(f"{verb} for {', '.join(r['identities'])}:")
+        print(f"  {r['usage']} usage record(s), {r['overrides']} quota override(s), "
+              f"{r['conversations']} conversation(s) with {r['turns']} turn(s)")
+        print(f"  and remove their name from {r['repos']} repository record(s); "
+              f"the repositories stay")
+        if not r["deleted"]:
+            print("Nothing changed. Run again with --yes to delete.")
+        print("Not covered here:\n"
+              "  - the login: aws cognito-idp admin-delete-user --user-pool-id <pool> --username <email>\n"
+              "  - backups and snapshots, which still hold this data until they expire\n"
+              "    (S3 dumps after the bucket's retention, EBS snapshots after their count)")
+        graph.close_driver()
+        return
+    if args.cmd == "prune":
+        n = prune(args.days)
+        print(f"deleted {n} usage record(s) older than "
+              f"{args.days if args.days is not None else retention_days()} day(s)")
+        graph.close_driver()
+        return
     if args.cmd == "set":
         set_override(args.user, args.daily_tokens)
         print(f"{args.user}: {args.daily_tokens or 'unlimited'} tokens/day")

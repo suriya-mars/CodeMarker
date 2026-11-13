@@ -226,7 +226,7 @@ def test_commit_impact_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setenv("NEO4J_PASSWORD", PASSWORD)
     graph.close_driver()
     graph.setup_schema()
-    graph.clear_graph()
+    graph.wipe_test_database()
 
     repo = tmp_path / "demo"
     _write(repo, V1)
@@ -271,7 +271,7 @@ def test_commit_impact_end_to_end(tmp_path, monkeypatch):
         assert again is not None and again.to_dict() == r.to_dict()
         assert "core.helper" in impact.to_markdown(r)
     finally:
-        graph.clear_graph()
+        graph.wipe_test_database()
         graph.close_driver()
 
 

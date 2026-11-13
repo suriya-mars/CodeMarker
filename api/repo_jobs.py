@@ -240,13 +240,29 @@ def add(url: str, user: str) -> str:
     if existing:
         raise Exists(f"This repository is already added as {existing[0]['name']}")
     for candidate in (base, f"{owner}-{base}"):
-        if _NAME.match(candidate) and _get(candidate) is None and locate(candidate) is None:
+        if not _NAME.match(candidate) or _get(candidate) is not None:
+            continue
+        path = locate(candidate)
+        # A clone of this same URL is already on disk but the database has no record of
+        # it: the database was restored from a backup, or rebuilt. Reuse the clone.
+        if path is None or _clone_of(path, url):
             name = candidate
             break
     else:
         raise Exists(f"A repository named {base} already exists")
     _claim(name, user, {"url": url, "added_by": user, "created_at": time.time()})
     return name
+
+
+def _clone_of(path: Path, url: str) -> bool:
+    """True if `path` is one of our clones, of exactly this URL."""
+    if path.parent != clone_root() or not (path / ".git").exists():
+        return False
+    try:
+        origin = _git(["-C", str(path), "config", "--get", "remote.origin.url"]).strip()
+    except RuntimeError:
+        return False
+    return origin == url
 
 
 def refresh(name: str, user: str, *, analyze: bool = False) -> None:
