@@ -95,7 +95,7 @@ def test_blast_radius_answers_from_the_refresh_report(client, monkeypatch):
                                   change="modified")
     monkeypatch.setattr(repo_jobs, "pending_impact", lambda repo: _report([change]))
     asked = []
-    monkeypatch.setattr(impact, "ask", lambda report, question: asked.append(
+    monkeypatch.setattr(impact, "ask", lambda report, question, history=None: asked.append(
         (report.id, question)) or {"answer": "a", "cited_ids": ["core.f"], "usage": {},
                                    "report_id": report.id})
     r = c.post("/ask", json={"question": "what breaks?", "repo": "shop", "mode": "impact"})

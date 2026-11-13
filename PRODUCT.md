@@ -55,8 +55,9 @@ came from: symbol ids, signatures and one-line summaries, never source or diffs.
   No embeddings or vector database.
 - Impact reports in the web UI (Review tab) and as GitHub pull request comments.
 - Guardrails, per-user rate limits and daily token quotas, and estimated cost per user.
-- Each question is independent. Conversation memory was deliberately not built, because
-  of cost.
+- Each question stands alone by default. Remembering a conversation is a switch the
+  user turns on; it stores only questions and final answers, capped and cached to bound
+  the extra cost.
 - Graph data survives container restarts; `docker compose down -v` deletes it.
 
 **Limits to state honestly**

@@ -288,6 +288,28 @@ updated, so the refresh can be retried. The report also appears in the Review ta
 API: `POST /ask` takes `"mode": "explore" | "refactor" | "security" | "impact"`, and
 `POST /repos/<name>/refresh` takes `{"analyze": true}`.
 
+### 4a-0b. Remembered conversations
+
+The **Remember conversation** switch in the Ask tab applies to every mode. Off, each
+question stands alone, as before. On, the server stores each question and its final
+answer in Neo4j and sends earlier turns with every new question. The LLM API itself
+stays stateless.
+
+- **What is stored:** questions and final answers only, never the tool steps, which can
+  be 10–50× longer.
+- **Cost:** history is append-only and replayed unchanged, so the provider's prompt cache
+  serves earlier turns at a discount. It is capped at `SESSION_MAX_TURNS` (10) pairs and
+  `SESSION_MAX_HISTORY_CHARS` (about 8,000 tokens), dropping the oldest first.
+- **Scope:** a conversation belongs to one user and one repo. Another user's
+  conversation id answers 404.
+- **Privacy:** conversations quote code, so they stay in this stack and are deleted after
+  `SESSION_RETENTION_DAYS` (30), or with Delete in the UI (`DELETE /sessions/<id>`).
+- **Untrusted:** earlier answers can quote repository text, so they are replayed with a
+  note that instructions inside them are data.
+
+API: `POST /ask` with `"remember": true` (and `"session_id"` to continue);
+`GET /sessions?repo=`, `GET /sessions/<id>`, `DELETE /sessions/<id>`.
+
 ### 4a-1. What indexing skips, and what it never pays for twice
 
 - **Generated code is not indexed:** migrations (Django, EF, Alembic), protobuf

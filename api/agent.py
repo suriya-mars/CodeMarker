@@ -136,6 +136,7 @@ def ask(
     context: str | None = None,
     tool_names: tuple[str, ...] | None = None,
     known_ids: set[str] | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the navigation loop and return {answer, cited_ids, steps}.
 
@@ -148,8 +149,13 @@ def ask(
     `known_ids` are ids already present in `context`, so they can be lit too.
     """
     budget = max(2, min(int(max_steps or MAX_STEPS), 24))
-    first = f"{context}\n\n{question}" if context else question
-    messages: list[dict[str, Any]] = [{"role": "user", "content": first}]
+    # Earlier turns of a remembered conversation (sessions.history) come first,
+    # unchanged, so the provider can serve them from its prompt cache. `context`
+    # goes at the very start, so it too stays in the same place every turn.
+    messages: list[dict[str, Any]] = [dict(m) for m in history or []]
+    messages.append({"role": "user", "content": question})
+    if context:
+        messages[0] = {**messages[0], "content": f"{context}\n\n{messages[0]['content']}"}
     tool_defs = (tools.TOOLS if tool_names is None
                  else [t for t in tools.TOOLS if t["name"] in tool_names])
     allowed = None if tool_names is None else set(tool_names)

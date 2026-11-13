@@ -55,6 +55,10 @@ services:
       GUARD_MODE: "${GUARD_MODE:-required}"
       GUARD_THRESHOLD: "${GUARD_THRESHOLD:-0.99}"
       REPOS_ROOT: "/repos"
+      # sessions.py: remembered conversations
+      SESSION_MAX_TURNS: "${SESSION_MAX_TURNS:-10}"
+      SESSION_MAX_HISTORY_CHARS: "${SESSION_MAX_HISTORY_CHARS:-32000}"
+      SESSION_RETENTION_DAYS: "${SESSION_RETENTION_DAYS:-30}"
       # repo_jobs.py: repositories added by URL in the Repos tab
       CLONE_ROOT: "/clones"
       CLONE_ALLOWED_HOSTS: "${CLONE_ALLOWED_HOSTS:-github.com,gitlab.com,bitbucket.org}"

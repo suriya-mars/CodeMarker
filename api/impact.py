@@ -1123,7 +1123,7 @@ IMPACT_TOOLS = ("get_definition", "get_callers", "get_callees", "get_community")
 
 
 def ask(report: ImpactReport, question: str | None = None,
-        max_steps: int = 6) -> dict[str, Any]:
+        max_steps: int = 6, history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     import agent  # local: keeps the deterministic report importable without llm deps
 
     import tools
@@ -1143,6 +1143,7 @@ def ask(report: ImpactReport, question: str | None = None,
             context=context,
             tool_names=IMPACT_TOOLS,
             known_ids={c.id for c in report.changed} | {a.id for a in report.affected},
+            history=history,
         )
     return result | {"report_id": report.id}
 

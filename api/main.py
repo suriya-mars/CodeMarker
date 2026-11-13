@@ -6,6 +6,7 @@ by /ask. The context package and the graph share one id space.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -24,6 +25,7 @@ import modes
 import pr_review
 import quota
 import repo_jobs
+import sessions
 import telemetry
 import tools
 
@@ -49,7 +51,7 @@ if _cors:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type", "Authorization"],
     )
 
@@ -102,6 +104,10 @@ class AskRequest(BaseModel):
     repo: str = ""
     # A NAME, never a prompt: the system prompts live server-side (modes.py).
     mode: Literal["explore", "refactor", "security", "impact"] = "explore"
+    # Remember this conversation: earlier turns are sent with the question. Without
+    # a session_id a new conversation is started; its id comes back in the response.
+    remember: bool = False
+    session_id: str | None = Field(None, max_length=64)
 
 
 class RefreshRequest(BaseModel):
@@ -218,6 +224,23 @@ def ask(req: AskRequest, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="question is required")
     if req.repo and not _REPO_NAME.match(req.repo):
         raise HTTPException(status_code=400, detail="repo must be a plain directory name")
+    user = auth.user_key(request)
+    sid, history = None, None
+    if req.remember:
+        if not req.repo:
+            raise HTTPException(status_code=400, detail="choose a repository to remember a conversation")
+        if req.session_id:
+            session = sessions.get(req.session_id, user)
+            if session is None:
+                raise HTTPException(status_code=404, detail="no such conversation")
+            if session["repo"] != req.repo:
+                raise HTTPException(status_code=400, detail="that conversation is about another repository")
+            sid = req.session_id
+            history = sessions.history(sid)
+        else:
+            sid = sessions.create(user, req.repo)
+            history = []
+
     if req.mode == modes.IMPACT:
         if not req.repo:
             raise HTTPException(status_code=400, detail="choose a repository")
@@ -227,27 +250,53 @@ def ask(req: AskRequest, request: Request) -> dict[str, Any]:
         if not report.changed:
             raise HTTPException(status_code=409, detail=(
                 "The latest refresh changed no code symbols, so there is no blast radius."))
-        result = impact.ask(report, req.question)
-        quota.charge(request, result.get("usage"))
+        result = impact.ask(report, req.question, history=history)
+    else:
+        mode = modes.MODES[req.mode]
+        # Step budget scales with the indexed repo (scale.py); missing profile is fine.
+        prof = graph.get_profile()
         with tools.scoped(req.repo):
-            try:
-                result["path"] = tools.connect(result.get("cited_ids") or [])
-            except Exception:  # noqa: BLE001 — a paid-for answer outlives a failed highlight
-                result["path"] = {"nodes": [], "edges": []}
-        return result
-    mode = modes.MODES[req.mode]
-    # Step budget scales with the indexed repo (scale.py); missing profile is fine.
-    prof = graph.get_profile()
+            result = agent.ask(req.question, max_steps=prof.get("max_agent_steps"),
+                               system=mode.system, tool_names=mode.tool_names, history=history)
+    quota.charge(request, result.get("usage"))
     with tools.scoped(req.repo):
-        result = agent.ask(req.question, max_steps=prof.get("max_agent_steps"),
-                           system=mode.system, tool_names=mode.tool_names)
-        quota.charge(request, result.get("usage"))
         try:
             result["path"] = tools.connect(result.get("cited_ids") or [])
         except Exception as exc:  # noqa: BLE001 — a paid-for answer outlives a failed highlight
             print(f"[ask] could not connect cited symbols: {exc}")
             result["path"] = {"nodes": [], "edges": []}
+    if sid:
+        sessions.append(sid, req.question, result.get("answer") or "", req.mode,
+                        result.get("cited_ids"), result.get("path"))
+        result["session_id"] = sid
+        result["history_turns"] = len(history or []) // 2
     return result
+
+
+@app.get("/sessions")
+def list_sessions(repo: str, request: Request) -> list[dict[str, Any]]:
+    """The caller's own remembered conversations about one repo, newest first."""
+    if not _REPO_NAME.match(repo):
+        raise HTTPException(status_code=400, detail="repo must be a plain directory name")
+    return sessions.list_for(auth.user_key(request), repo)
+
+
+@app.get("/sessions/{sid}")
+def get_session(sid: str, request: Request) -> dict[str, Any]:
+    session = sessions.get(sid, auth.user_key(request))
+    if session is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    turns = sessions.turns(sid)
+    for t in turns:
+        t["path"] = json.loads(t["path"] or "{}")
+    return {"id": sid, "repo": session["repo"], "title": session.get("title", ""), "turns": turns}
+
+
+@app.delete("/sessions/{sid}")
+def delete_session(sid: str, request: Request) -> dict[str, str]:
+    if not sessions.delete(sid, auth.user_key(request)):
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return {"status": "deleted"}
 
 
 @app.post("/impact", dependencies=[Depends(auth.rate_limit)])

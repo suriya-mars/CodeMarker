@@ -213,6 +213,7 @@ CodeMarker/                   # the repo folder keeps its old name; the product 
 │   ├── pr_review.py          # GitHub pull request comments: signed webhook → impact report → one comment
 │   ├── tools.py              # graph tool defs (TOOLS) + Cypher dispatch
 │   ├── agent.py              # the navigation loop (ask())
+│   ├── sessions.py           # remembered conversations: append-only Q/A history in Neo4j, capped, per user+repo
 │   ├── modes.py              # Ask modes: explore / refactor / security system prompts (server-side only)
 │   ├── main.py               # FastAPI: POST /index, POST /ask, GET /graph
 │   └── tests/

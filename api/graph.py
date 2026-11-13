@@ -84,6 +84,10 @@ SCHEMA_STATEMENTS = [
       FOR (c:SummaryCache) REQUIRE c.key IS UNIQUE
     """,
     """
+    CREATE CONSTRAINT session_id IF NOT EXISTS
+      FOR (s:Session) REQUIRE s.id IS UNIQUE
+    """,
+    """
     CREATE CONSTRAINT usage_quota_key IF NOT EXISTS
       FOR (q:UsageQuota) REQUIRE q.key IS UNIQUE
     """,

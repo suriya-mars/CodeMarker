@@ -268,6 +268,8 @@ Stop the main stack first if it is running; both use the same ports.
 | Review tab, after a signature change | A High risk label, the flag naming the callers, each changed symbol as its own sample in the log |
 | Second `--stage community` run | `community summaries: 0 generated, N reused` |
 | `python -m pr_review <repo> <n>` | The comment printed; nothing posted |
+| Ask two related questions with **Remember conversation** off, then on | Off: the second answer ignores the first. On: it follows on, and shows "Answered with 1 earlier turn of this conversation" |
+| Reload the page with Remember on | Earlier conversations are listed in the switch's menu and can be resumed or deleted |
 | Ask tab, Blast radius mode, before an analysed refresh | "No new symbols or code to check blast radius", and the question box disabled |
 | Commit a change, then **Refresh and analyse** in Blast radius mode | "Change ready to check" with risk and counts; the report is listed in Review |
 | Ask tab, Security or Refactor mode | The answer follows that mode's format; the request carries only the mode's name |

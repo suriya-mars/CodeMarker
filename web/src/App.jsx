@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import cytoscape from "cytoscape";
 import fcose from "cytoscape-fcose";
-import { fetchGraph, fetchReport, fetchRepos, fetchSource, ask, refreshRepo } from "./api.js";
+import {
+  fetchGraph, fetchReport, fetchRepos, fetchSource, ask, refreshRepo,
+  fetchSessions, fetchSession, deleteSession,
+} from "./api.js";
+import Remember from "./Remember.jsx";
 import { applyTheme, loadTheme, readTokens } from "./themes.js";
 import ThemeMenu from "./ThemeMenu.jsx";
 import CoreLog, { HAS_CODE, SymbolDetail, buildCore } from "./CoreLog.jsx";
@@ -127,6 +131,15 @@ export default function App() {
     }
   });
   const [blastError, setBlastError] = useState("");
+  const [remember, setRememberState] = useState(() => {
+    try {
+      return localStorage.getItem("repodigger.remember") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionList, setSessionList] = useState([]);
   const [graphVersion, setGraphVersion] = useState(0); // bumped when the open repo is re-indexed
   const indexedAt = useRef({});
   const endRef = useRef(null);
@@ -144,6 +157,60 @@ export default function App() {
       localStorage.setItem("repodigger.mode", id);
     } catch {
       // a remembered mode is a convenience; the default works without it
+    }
+  }
+
+  function setRemember(on) {
+    setRememberState(on);
+    setSessionId(null); // switching either way starts afresh; earlier ones can be resumed
+    try {
+      localStorage.setItem("repodigger.remember", on ? "1" : "0");
+    } catch {
+      // a remembered preference is a convenience; the default works without it
+    }
+  }
+
+  function loadSessions(name = repo) {
+    if (!name) return;
+    fetchSessions(name).then(setSessionList).catch(() => setSessionList([]));
+  }
+
+  useEffect(() => {
+    if (remember && repo) loadSessions(repo);
+  }, [remember, repo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function newConversation() {
+    setSessionId(null);
+    setMessages([]);
+    setActive(null);
+    highlightPath([]);
+  }
+
+  async function resumeConversation(id) {
+    try {
+      const data = await fetchSession(id);
+      const restored = [];
+      data.turns.forEach((t) => {
+        restored.push({ role: "user", text: t.question, mode: t.mode });
+        restored.push({ role: "assistant", text: t.answer, cited: t.cited || [], path: t.path });
+      });
+      setSessionId(id);
+      setMessages(restored);
+      setActive(null);
+      highlightPath([]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "error", text: e.message }]);
+    }
+  }
+
+  async function removeConversation() {
+    if (!sessionId) return;
+    try {
+      await deleteSession(sessionId);
+      newConversation();
+      loadSessions();
+    } catch (e) {
+      setMessages((m) => [...m, { role: "error", text: e.message }]);
     }
   }
 
@@ -440,14 +507,19 @@ export default function App() {
     setSelected(null);
     const started = Date.now();
     try {
-      const res = await ask(q, repo, asked);
+      const res = await ask(q, repo, asked, { remember, sessionId });
       const answer = {
         role: "assistant",
         text: res.answer,
         cited: res.cited_ids || [],
         path: res.path,
+        context: res.session_id ? res.history_turns : null,
         spend: { usage: res.usage, seconds: Math.round((Date.now() - started) / 1000) },
       };
+      if (res.session_id) {
+        setSessionId(res.session_id);
+        loadSessions();
+      }
       setMessages((m) => [...m, answer]);
       showAnswer(answer);
     } catch (err) {
@@ -570,6 +642,21 @@ export default function App() {
         <div className="mode-bar">
           <ModePicker mode={askMode} onChange={setAskMode} disabled={busy} />
           <small className="mode-hint">{currentMode.hint}</small>
+          <Remember
+            on={remember}
+            onToggle={setRemember}
+            sessions={sessionList}
+            sessionId={sessionId}
+            onResume={resumeConversation}
+            onNew={newConversation}
+            onDelete={removeConversation}
+            disabled={busy || !repo}
+          />
+          <small className="mode-hint">
+            {remember
+              ? "Sends up to the last 10 questions and answers with each new question, so each costs a little more."
+              : "Each question stands alone; nothing earlier is sent."}
+          </small>
         </div>
         <div className="messages">
           {askMode === "impact" && repo && (
@@ -592,6 +679,11 @@ export default function App() {
               {m.role === "assistant" ? (
                 <>
                   <Answer text={m.text} />
+                  {m.context > 0 && (
+                    <small className="msg-context">
+                      Answered with {m.context} earlier {m.context === 1 ? "turn" : "turns"} of this conversation
+                    </small>
+                  )}
                   {m !== active && m.cited.length > 0 && (
                     <button type="button" className="link" onClick={() => showAnswer(m)}>
                       Show this path

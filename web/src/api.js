@@ -29,11 +29,11 @@ export async function fetchSource(id, repo) {
   return unwrap(await fetch(`${BASE}/symbol/source?${query}`), "Loading the code");
 }
 
-export async function ask(question, repo, mode = "explore") {
+export async function ask(question, repo, mode = "explore", { remember = false, sessionId = null } = {}) {
   const r = await fetch(`${BASE}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, repo: repo || "", mode }),
+    body: JSON.stringify({ question, repo: repo || "", mode, remember, session_id: sessionId }),
   });
   return unwrap(r, "Asking");
 }
@@ -86,4 +86,18 @@ export async function refreshRepo(name, analyze = false) {
     body: JSON.stringify({ analyze }),
   });
   return unwrap(r, "Refreshing");
+}
+
+export async function fetchSessions(repo) {
+  const query = new URLSearchParams({ repo });
+  return unwrap(await fetch(`${BASE}/sessions?${query}`), "Loading conversations");
+}
+
+export async function fetchSession(id) {
+  return unwrap(await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`), "Loading the conversation");
+}
+
+export async function deleteSession(id) {
+  const r = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  return unwrap(r, "Deleting the conversation");
 }
