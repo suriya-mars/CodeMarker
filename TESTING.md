@@ -172,6 +172,8 @@ docker compose run --rm api python -m quota set local 500000     # tokens per UT
 docker compose run --rm api python -m quota set local 0          # unlimited
 docker compose run --rm api python -m quota clear local          # back to DAILY_TOKEN_QUOTA
 docker compose run --rm api python -m quota list
+docker compose run --rm api python -m quota forget local          # preview what is stored about a user
+docker compose run --rm api python -m quota prune                 # apply usage retention now
 ```
 
 **Inspect the graph** in the Neo4j browser (http://localhost:7474):

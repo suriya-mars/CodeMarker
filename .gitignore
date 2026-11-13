@@ -8,3 +8,10 @@ node_modules/
 web/dist/
 repos/*
 !repos/.gitkeep
+
+# Terraform: local state and variables hold account details; the lock file is committed
+deploy/aws/terraform/.terraform/
+deploy/aws/terraform/*.tfstate
+deploy/aws/terraform/*.tfstate.*
+deploy/aws/terraform/terraform.tfvars
+repodigger-secret.json

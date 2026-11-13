@@ -1,0 +1,92 @@
+# Production stack. Standalone, not an override of docker-compose.yml, so nothing
+# from development (code mounts, --reload, published database ports) leaks in.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Secrets come from .env, written by deploy/render-env.sh from AWS Secrets Manager.
+# Only the web container publishes a port; the load balancer is its only client.
+name: repodigger
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  neo4j:
+    <<: *hardening
+    image: neo4j:5.26.27-community        # pinned: the version the app was tested on
+    environment:
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}"
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP:-4G}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP:-4G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-2G}"
+      # Neo4j reports anonymous usage data to Neo4j by default. Nothing leaves this stack
+      # except the LLM call (CLAUDE.md §2.3), so it is off.
+      NEO4J_dbms_usage__report_enabled: "false"
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    # no ports: only the api reaches it, over the compose network
+
+  api:
+    <<: *hardening
+    build: ./api
+    image: repodigger-api:local
+    env_file: ${ENV_FILE:-.env}
+    environment:
+      NEO4J_URI: "bolt://neo4j:7687"
+      AUTH_MODE: "${AUTH_MODE:-alb}"       # production login is the load balancer's Cognito
+      GUARD_MODE: "required"               # never start without the injection guardrails
+      REPOS_ROOT: "/repos"
+      CLONE_ROOT: "/clones"
+      PR_MIRROR_ROOT: "/mirrors"
+      TELEMETRY_LOG: "1"
+    # No --reload and one process: the index queue and the rate limiter live in this
+    # process, so a second api container would break "one index job at a time".
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000",
+              "--no-server-header", "--timeout-keep-alive", "75"]
+    volumes:
+      - ./repos:/repos:ro                  # repos placed on the host, read-only
+      - cloned-repos:/clones               # repos added by URL
+      - pr-mirrors:/mirrors                # git history for pull request review
+    # The api parses untrusted repositories with native code. Contain a hostile file:
+    # read-only root, no Linux capabilities, bounded memory and processes.
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g                       # impact analysis materialises files here
+    cap_drop: [ALL]
+    mem_limit: "${API_MEM_LIMIT:-8g}"
+    pids_limit: 512
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s                   # the guardrail model takes a while to load
+
+  web:
+    <<: *hardening
+    build: ./web
+    image: repodigger-web:local
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    depends_on:
+      - api
+
+volumes:
+  neo4j-data:
+  cloned-repos:
+  pr-mirrors:

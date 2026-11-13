@@ -18,6 +18,9 @@ services:
       NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP:-4G}"
       NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP:-4G}"
       NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-2G}"
+      # Neo4j reports anonymous usage data to Neo4j by default. Nothing leaves this stack
+      # except the LLM call (CLAUDE.md §2.3), so it is off.
+      NEO4J_dbms_usage__report_enabled: "false"
     volumes:
       - neo4j-data:/data
     healthcheck:
@@ -55,6 +58,7 @@ services:
       GUARD_MODE: "${GUARD_MODE:-required}"
       GUARD_THRESHOLD: "${GUARD_THRESHOLD:-0.99}"
       REPOS_ROOT: "/repos"
+      USAGE_RETENTION_DAYS: "${USAGE_RETENTION_DAYS:-400}"   # quota.py: usage records hold emails
       # sessions.py: remembered conversations
       SESSION_MAX_TURNS: "${SESSION_MAX_TURNS:-10}"
       SESSION_MAX_HISTORY_CHARS: "${SESSION_MAX_HISTORY_CHARS:-32000}"

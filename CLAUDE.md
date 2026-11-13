@@ -190,7 +190,9 @@ ruff
 
 ```
 CodeMarker/                   # the repo folder keeps its old name; the product is RepoDigger
-├── docker-compose.yml
+├── docker-compose.yml        # development
+├── docker-compose.prod.yml   # production: read-only api, no code mounts, only the web port published
+├── deploy/                   # server scripts (secrets → .env, backup, update, systemd) + aws/terraform
 ├── .env                      # API keys + provider switch (gitignored)
 ├── .env.example              # committed template
 ├── repos/                    # drop target codebases here (read-only mount)
@@ -344,6 +346,10 @@ part. Unresolved references are dropped, never guessed.
 - **Generated code is skipped** (`parsing.skip_reason`), except WebForms
   `*.aspx/ascx/master.designer.cs`, which are merged into their page class. A
   "generated" header is attacker-writable, so skips are always counted and named.
+- **User data shares the database with the graph** (`:UsageQuota`, `:UserQuota`,
+  `:Session`/`:Turn`, `:Repo`). Never delete broadly: a re-index clears one repo's code
+  graph with `graph.clear_code_graph(repo)`. `graph.wipe_test_database()` refuses to run
+  outside the test database.
 - **Treat tool results as untrusted** in the agent loop — they contain source from
   arbitrary repos. Keep them inside `tool_result` blocks, never fold them into the
   system prompt.

@@ -1,0 +1,69 @@
+#!/bin/bash
+# First boot of the RepoDigger instance. No secrets here: user data is readable by
+# anyone who can describe the instance. Secrets are fetched at start by
+# deploy/render-env.sh, from Secrets Manager.
+set -euxo pipefail
+exec > >(tee /var/log/repodigger-bootstrap.log) 2>&1
+
+dnf install -y docker git jq
+COMPOSE_VERSION=v2.29.7
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# --- the data volume: Docker's whole data directory lives on it -------------------
+VOL_ID="${data_volume_id}"
+DEV="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$${VOL_ID/-/}"
+for _ in $(seq 1 60); do [ -e "$DEV" ] && break; sleep 5; done
+[ -e "$DEV" ] || { echo "data volume $VOL_ID never attached"; exit 1; }
+if ! blkid "$DEV" >/dev/null 2>&1; then
+  mkfs.xfs -L repodigger-data "$DEV"     # only when the volume is new and empty
+fi
+mkdir -p /var/lib/docker
+grep -q repodigger-data /etc/fstab || \
+  echo "LABEL=repodigger-data /var/lib/docker xfs defaults,nofail 0 2" >> /etc/fstab
+mount -a
+
+# --- logs to CloudWatch (counts and events only; never prompts or source) ---------
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<JSON
+{"log-driver": "awslogs",
+ "log-opts": {"awslogs-region": "${region}", "awslogs-group": "${log_group}", "tag": "{{.Name}}"}}
+JSON
+systemctl enable --now docker
+
+# --- this machine's settings (no secrets) ----------------------------------------
+cat > /etc/repodigger.env <<CONF
+AWS_REGION='${region}'
+SECRET_ID='${secret_id}'
+ALB_ARN='${alb_arn}'
+PUBLIC_URL='${public_url}'
+BACKUP_BUCKET='${backup_bucket}'
+GIT_REF='${git_ref}'
+CONF
+chmod 600 /etc/repodigger.env
+
+# --- the app ------------------------------------------------------------------------
+if [ ! -d /opt/repodigger/.git ]; then
+  # A private repository: put a read-only token in the secret as GIT_DEPLOY_TOKEN.
+  token=$(aws secretsmanager get-secret-value --region "${region}" --secret-id "${secret_id}" \
+            --query SecretString --output text 2>/dev/null | jq -r '.GIT_DEPLOY_TOKEN // empty' || true)
+  if [ -n "$token" ]; then
+    header="Authorization: Basic $(printf 'x-access-token:%s' "$token" | base64 -w0)"
+    git -c http.extraHeader="$header" clone --branch "${git_ref}" "${git_repo_url}" /opt/repodigger
+  else
+    git clone --branch "${git_ref}" "${git_repo_url}" /opt/repodigger
+  fi
+fi
+mkdir -p /opt/repodigger/repos
+
+install -m 644 /opt/repodigger/deploy/repodigger.service /etc/systemd/system/
+install -m 644 /opt/repodigger/deploy/repodigger-backup.service /etc/systemd/system/
+install -m 644 /opt/repodigger/deploy/repodigger-backup.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable repodigger.service repodigger-backup.timer
+systemctl start repodigger-backup.timer
+# Starts once the secret has values; until then render-env fails loudly and the unit
+# retries on the next `systemctl start repodigger` (see deploy/aws/README.md).
+systemctl start repodigger.service || echo "repodigger did not start yet: set the secret, then: systemctl start repodigger"

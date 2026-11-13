@@ -1,0 +1,8 @@
+name                = "repodigger"
+region              = "us-east-1"
+domain_name         = "repodigger.example.com"
+route53_zone_id     = "Z0123456789ABCDEFGHIJ"   # or leave empty and set certificate_arn
+git_repo_url        = "https://github.com/your-org/CodeMarker.git"
+git_ref             = "main"
+initial_user_emails = ["you@example.com"]
+# allowed_cidrs     = ["203.0.113.0/24"]        # your office or VPN; default is anywhere

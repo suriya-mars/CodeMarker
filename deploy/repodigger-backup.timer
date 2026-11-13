@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly RepoDigger Neo4j backup (stops the database for about a minute)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

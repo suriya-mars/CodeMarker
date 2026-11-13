@@ -1,0 +1,11 @@
+[Unit]
+Description=RepoDigger Neo4j backup to S3
+Requires=docker.service
+After=repodigger.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/repodigger/deploy/backup.sh
+# Runs however the backup ends, even if it is killed: the app must never stay down.
+ExecStopPost=/usr/bin/docker compose -f /opt/repodigger/docker-compose.prod.yml --project-directory /opt/repodigger up -d neo4j api
+TimeoutStartSec=1h

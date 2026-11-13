@@ -470,6 +470,31 @@ docker run --rm codemarker-api python -m pytest -q
 
 ---
 
+## 6b. User data: where it lives, how long, how to remove it
+
+Everything is in Neo4j alongside the graph (logins are in Cognito). Usage records hold
+each user's email and are deleted after `USAGE_RETENTION_DAYS` (400); conversations after
+`SESSION_RETENTION_DAYS` (30). A full re-index (`--fresh`) clears only that repo's code
+graph and never touches user data or other repos.
+
+To remove everything stored about one person:
+
+```bash
+docker compose run --rm api python -m quota forget alice@example.com        # preview
+docker compose run --rm api python -m quota forget alice@example.com --yes  # delete
+```
+
+It deletes their usage, quota override and conversations, and removes their name from
+repos they added (the repos stay). Also delete their Cognito login, and remember that
+backups and snapshots keep the data until they expire.
+
+## 6a. Production on AWS
+
+`docker-compose.prod.yml` is the production stack (no code mounts, no `--reload`,
+read-only api, only the web port published, Neo4j usage reporting off).
+`deploy/aws/` holds the Terraform and server scripts; the full procedure, including a
+restore drill, is in [deploy/aws/README.md](deploy/aws/README.md).
+
 ## 7. Troubleshooting
 
 Every entry below is an error hit in practice.
