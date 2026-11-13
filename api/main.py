@@ -40,6 +40,27 @@ except Exception as exc:  # noqa: BLE001 — the database may not be up yet
 # Every route requires a user; auth.require_user exempts only /health.
 app = FastAPI(title="RepoDigger", dependencies=[Depends(auth.require_user)])
 
+# Every API response is JSON for the page's own scripts, never a page to render, and
+# much of it quotes repository code or usage data. So: never cached by a browser or
+# proxy, never sniffed into another type, never framed, and nothing in it may load or
+# run if someone opens an API URL directly. nginx adds the page headers on top; these
+# hold even when the api is reached without nginx (port 8000 in development).
+_API_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in _API_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
+
 # The web UI reaches the API same-origin (nginx proxies /api/ -> api:8000), so a
 # browser needs NO cross-origin access. CORS is therefore off unless origins are
 # listed explicitly — never "*", which would let any website a logged-in user

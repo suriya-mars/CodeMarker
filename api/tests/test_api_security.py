@@ -175,3 +175,24 @@ def test_cors_allows_only_listed_origins(monkeypatch, repos):
     bad = c.get("/health", headers={"Origin": "https://evil.example"})
     assert ok.headers.get("access-control-allow-origin") == "https://explorer.example.com"
     assert "access-control-allow-origin" not in bad.headers
+
+
+# --- response headers -------------------------------------------------------
+
+
+@pytest.mark.parametrize(("method", "path"), [
+    ("get", "/health"), ("get", "/usage"), ("get", "/nope"), ("post", "/index"),
+])
+def test_every_api_response_is_uncacheable_and_inert(monkeypatch, repos, method, path):
+    c = _client(monkeypatch)
+    r = c.request(method.upper(), path, json={} if method == "post" else None)
+    assert r.headers["cache-control"] == "no-store"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert r.headers["referrer-policy"] == "no-referrer"
+
+
+def test_headers_are_on_refusals_too(monkeypatch, repos):
+    """A 401 carries the same protection as a 200."""
+    r = _client(monkeypatch, AUTH_MODE="token", API_TOKEN=TOKEN).get("/usage")
+    assert r.status_code == 401 and r.headers["cache-control"] == "no-store"
