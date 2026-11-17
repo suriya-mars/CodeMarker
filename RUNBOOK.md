@@ -344,7 +344,8 @@ re-indexes only if there is one; only new or changed code is re-summarized.
 - Repos dropped into `./repos` appear in the same list, and Refresh re-indexes them
   if their commit moved.
 - A restart stops a running job; the row says so, and Refresh starts it again.
-- There is no delete yet. To remove a repo, see §7.
+- **Delete** on a row removes the repo's graph, reports, conversations and clone,
+  after you type its name. Anyone signed in can do this; there is no admin role yet.
 
 Same from the command line:
 
@@ -499,15 +500,16 @@ restore drill, is in [deploy/aws/README.md](deploy/aws/README.md).
 
 Every entry below is an error hit in practice.
 
-**Removing a repository** (there is no delete button yet). Replace `NAME` in both:
+**Removing a repository.** In the Repos tab, choose **Delete** on its row and type its
+name to confirm. Or from the command line:
 ```bash
-docker compose exec -T neo4j cypher-shell -u neo4j -p "$(grep '^NEO4J_PASSWORD=' .env | cut -d= -f2- | cut -d' ' -f1)" \
-  "MATCH (s:Symbol {repo: 'NAME'}) DETACH DELETE s;
-   MATCH (r:Repo {name: 'NAME'}) DELETE r;
-   MATCH (st:RepoState {repo: 'NAME'}) DELETE st;"
-docker compose exec api rm -rf /clones/NAME      # a repo added by URL
+docker compose run --rm api python -m repo_jobs delete NAME          # preview
+docker compose run --rm api python -m repo_jobs delete NAME --yes    # delete
+docker compose run --rm api python -m repo_jobs delete --all --yes   # every repo
 ```
-Then run the community stage once, so communities no longer include its code.
+This removes its graph, impact reports, conversations about it, and its clone if it was
+added by URL. Summary caches are kept, so adding it back costs little. A repo in
+`./repos` keeps its files and comes back if it is indexed again.
 
 **`No module named measure`**
 `python -m X` needs `X.py` in the current directory. Run it by path instead —

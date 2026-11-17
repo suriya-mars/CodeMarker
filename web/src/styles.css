@@ -457,7 +457,19 @@ h1, h2, p { margin: 0; }
 }
 .repo-row.on { border-color: var(--line); }
 .repo-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.repo-row { flex-wrap: wrap; }
+.repo-actions { flex: none; display: flex; align-items: center; gap: 10px; }
 .repo-row .control { flex: none; }
+.danger-link { color: var(--danger); }
+.danger-link:disabled { opacity: 0.55; cursor: default; }
+.confirm-delete { flex: 1 0 100%; display: grid; gap: 8px; margin-top: 6px; padding: 10px; border: 1px solid var(--danger-bg); border-radius: 6px; background: var(--s2); }
+.confirm-delete p { font-size: 12.5px; line-height: 1.45; }
+.confirm-actions { display: flex; align-items: center; gap: 12px; }
+.danger-button {
+  padding: 6px 14px; border: 0; border-radius: 6px; background: var(--danger-bg); color: var(--danger);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.danger-button:disabled { opacity: 0.5; cursor: default; }
 .repo-open {
   justify-self: start; padding: 0; border: 0; background: none; color: var(--text); font: inherit;
   font-size: 13px; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer;

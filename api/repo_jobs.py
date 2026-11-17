@@ -287,6 +287,56 @@ def pending_impact(name: str) -> impact.ImpactReport | None:
     return impact.load_report(repo["impact_report"])
 
 
+def delete(name: str, user: str) -> dict[str, Any]:
+    """Delete everything RepoDigger holds for one repo, and its clone.
+
+    Removed: the code graph (symbols, edges, indexed commit), communities left with
+    no members, impact reports, remembered conversations about it, its repo record,
+    and the clone and pull-request mirror if this server made them. Kept: the summary
+    caches (they are keyed by content, not repo, and save money if it comes back),
+    and a mounted repo's files under REPOS_ROOT, which are read-only here; it shows
+    up again only if it is indexed again.
+
+    Refused while a job for it is queued or running, so a job never writes into a
+    half-deleted repo."""
+    if not _NAME.match(name or ""):
+        raise ValueError("repo must be a plain directory name")
+    with _lock:
+        repo = _get(name)
+        if repo and repo.get("status") in ACTIVE:
+            raise Busy(f"{name} is being indexed; delete it when the job finishes")
+        symbols = graph.clear_code_graph(name)
+        counts = graph._run(
+            """
+            CALL () { MATCH (r:ImpactReport {repo: $repo}) DELETE r RETURN count(*) AS reports }
+            CALL () { MATCH (s:Session {repo: $repo})
+                      OPTIONAL MATCH (s)-[:HAS_TURN]->(t:Turn)
+                      DETACH DELETE s, t RETURN count(DISTINCT s) AS conversations }
+            CALL () { MATCH (r:Repo {name: $repo}) DELETE r RETURN count(*) AS records }
+            RETURN reports, conversations, records
+            """,
+            repo=name,
+        )[0]
+        graph._run("MATCH (c:Community) WHERE NOT ()-[:IN_COMMUNITY]->(c) DETACH DELETE c")
+    files = []
+    clone = clone_root() / name
+    if clone.resolve().parent == clone_root() and clone.is_dir() and not clone.is_symlink():
+        shutil.rmtree(clone)
+        files.append("clone")
+    mirror = Path(os.environ.get("PR_MIRROR_ROOT", "/mirrors")).resolve()
+    if (mirror / name).resolve().parent == mirror and (mirror / name).is_dir():
+        shutil.rmtree(mirror / name)
+        files.append("pull request mirror")
+    mounted = (repos_root() / name).is_dir()
+    print(f"[repos] {name} deleted by {user}: {symbols} symbols, {counts}", flush=True)
+    return {"repo": name, "symbols": symbols, **counts, "files_removed": files,
+            "mounted_files_kept": mounted}
+
+
+def all_names() -> list[str]:
+    return [r["repo"] for r in list_repos("")]
+
+
 # --- git --------------------------------------------------------------------
 
 
@@ -444,3 +494,40 @@ def _job(name: str) -> None:
     except Exception as exc:  # noqa: BLE001 — the reason is shown to the user
         print(f"[repos] {name} failed: {type(exc).__name__}: {exc}", flush=True)
         _set(name, status="failed", stage=None, error=scrub(str(exc)))
+
+
+def main() -> None:
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m repo_jobs",
+                                 description="Operator commands for indexed repositories.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    d = sub.add_parser("delete", help="delete a repo's graph, reports, conversations and clone")
+    d.add_argument("name", nargs="?", help="the repo to delete")
+    d.add_argument("--all", action="store_true", help="delete EVERY repo")
+    d.add_argument("--yes", action="store_true", help="really delete (default: only show)")
+    sub.add_parser("list", help="repos and their state")
+    args = ap.parse_args()
+
+    graph.setup_schema()
+    if args.cmd == "list":
+        for r in list_repos(""):
+            print(f"  {r['repo']:<30} {r['symbols']:>8,} symbols  {r['status']}")
+    else:
+        if bool(args.name) == args.all:
+            ap.error("give one repo name, or --all")
+        names = all_names() if args.all else [args.name]
+        if not args.yes:
+            print("Would delete: " + (", ".join(names) or "nothing"))
+            print("Nothing changed. Run again with --yes to delete.")
+        for n in names if args.yes else []:
+            r = delete(n, "operator (CLI)")
+            print(f"deleted {n}: {r['symbols']:,} symbols, {r['reports']} report(s), "
+                  f"{r['conversations']} conversation(s)"
+                  + (f", {' and '.join(r['files_removed'])}" if r["files_removed"] else "")
+                  + (" (its files under ./repos are kept)" if r["mounted_files_kept"] else ""))
+    graph.close_driver()
+
+
+if __name__ == "__main__":
+    main()

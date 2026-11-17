@@ -624,6 +624,15 @@ export default function App() {
               setMode("ask");
             }}
             onChanged={() => loadRepos()}
+            onDeleted={(name) => {
+              if (name !== repo) return;
+              // answers, reports and the conversation all described the deleted repo
+              setMessages([]);
+              setActive(null);
+              setOpened(null);
+              setSessionId(null);
+              setRepo(null);
+            }}
             analyze={askMode === "impact"}
           />
         </div>

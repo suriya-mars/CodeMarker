@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { addRepo, refreshRepo } from "./api.js";
+import { addRepo, deleteRepo, refreshRepo } from "./api.js";
 
 const ACTIVE = ["queued", "running"];
 
@@ -38,7 +38,50 @@ function state(r) {
   return [`${r.symbols.toLocaleString()} symbols`, skipped, at, ago(r.indexed_at)].filter(Boolean).join(", ");
 }
 
-export default function Repos({ repos, current, onOpen, onChanged, analyze }) {
+// Deleting cannot be undone, so the name must be typed again, here and on the server.
+function ConfirmDelete({ repo, onDone, onCancel }) {
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await deleteRepo(repo.repo);
+      onDone(repo.repo);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="confirm-delete" onSubmit={onSubmit}>
+      <p>
+        Delete <b>{repo.repo}</b>? This removes its graph, its impact reports and every
+        conversation about it{repo.url ? ", and its clone" : ""}, for everyone. It cannot be undone.
+        {!repo.url && " Its files in the repos folder are kept."}
+      </p>
+      <label className="field">
+        Type {repo.repo} to confirm
+        <input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus spellCheck="false"
+          autoComplete="off" disabled={busy} />
+      </label>
+      <div className="confirm-actions">
+        <button type="submit" className="danger-button" disabled={busy || typed !== repo.repo}>
+          {busy ? "Deleting…" : "Delete"}
+        </button>
+        <button type="button" className="link" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+      {error && <small className="repo-error">{error}</small>}
+    </form>
+  );
+}
+
+export default function Repos({ repos, current, onOpen, onChanged, onDeleted, analyze }) {
+  const [deleting, setDeleting] = useState(null);
   const [url, setUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
@@ -127,6 +170,7 @@ export default function Repos({ repos, current, onOpen, onChanged, analyze }) {
                   {r.status === "ready" && r.warning && <small className="repo-warning">{r.warning}</small>}
                   {r.blast && <small className="repo-state">Blast radius ready for the latest change</small>}
                 </div>
+                <div className="repo-actions">
                 <button
                   type="button"
                   className="control"
@@ -136,6 +180,27 @@ export default function Repos({ repos, current, onOpen, onChanged, analyze }) {
                 >
                   {active ? "Working…" : analyze ? "Refresh and analyse" : "Refresh"}
                 </button>
+                <button
+                  type="button"
+                  className="link danger-link"
+                  onClick={() => setDeleting(r.repo)}
+                  disabled={active}
+                  aria-label={`Delete ${r.repo}`}
+                >
+                  Delete
+                </button>
+                </div>
+                {deleting === r.repo && (
+                  <ConfirmDelete
+                    repo={r}
+                    onCancel={() => setDeleting(null)}
+                    onDone={(name) => {
+                      setDeleting(null);
+                      onDeleted?.(name);
+                      onChanged();
+                    }}
+                  />
+                )}
               </li>
             );
           })}

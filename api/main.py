@@ -430,6 +430,20 @@ def symbol_source(id: str, repo: str = "") -> dict[str, Any]:
     return row
 
 
+@app.delete("/repos/{name}")
+def delete_repo(name: str, request: Request, confirm: str = "") -> dict[str, Any]:
+    """Delete a repo's graph, reports, conversations and clone. `confirm` must repeat
+    the name: there is no undo, and every signed-in user can reach this route."""
+    if not _REPO_NAME.match(name):
+        raise HTTPException(status_code=400, detail="repo must be a plain directory name")
+    if confirm != name:
+        raise HTTPException(status_code=400, detail="confirm must repeat the repo name exactly")
+    try:
+        return repo_jobs.delete(name, auth.user_key(request))
+    except repo_jobs.Busy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/repos")
 def list_repos(request: Request) -> list[dict[str, Any]]:
     """Every repo with its index state: symbols, commit, and any job queued or

@@ -465,3 +465,85 @@ def test_a_clone_of_a_different_url_is_never_taken_over(world, tmp_path):
     repo_jobs.add(world["url"], "alice")
     graph.wipe_test_database()
     assert repo_jobs.add(f"file://{other}", "alice") == "acme-shop"
+
+
+# --- deleting a repo ------------------------------------------------------------
+
+
+@needs_neo4j
+def test_delete_removes_the_repo_everywhere_and_nothing_else(world):
+    import sessions
+
+    repo_jobs.add(world["url"], "alice")
+    other = world["tmp"] / "repos" / "other"
+    other.mkdir()
+    (other / "o.py").write_text("def o():\n    return 1\n")
+    repo_jobs.refresh("other", "alice")
+    graph._run("CREATE (:ImpactReport {id: 'r1', repo: 'shop'}), (:ImpactReport {id: 'r2', repo: 'other'})")
+    sid = sessions.create("alice", "shop")
+    sessions.append(sid, "q", "a", "explore")
+    keep = sessions.create("alice", "other")
+    sessions.append(keep, "q", "a", "explore")
+    caches = graph._run("MATCH (c:SummaryCache) RETURN count(c) AS n")[0]["n"]
+
+    r = repo_jobs.delete("shop", "alice")
+
+    assert (r["symbols"], r["reports"], r["conversations"], r["records"]) == (3, 1, 1, 1)
+    assert r["files_removed"] == ["clone"] and r["mounted_files_kept"] is False
+    assert not (world["tmp"] / "clones" / "shop").exists()
+    assert [x["repo"] for x in repo_jobs.list_repos("alice")] == ["other"]
+    assert graph._run("MATCH (s:Symbol {repo: 'other'}) RETURN count(s) AS n")[0]["n"] == 2
+    assert graph._run("MATCH (r:ImpactReport) RETURN collect(r.id) AS ids")[0]["ids"] == ["r2"]
+    assert sessions.get(keep, "alice") is not None and sessions.get(sid, "alice") is None
+    assert graph._run("MATCH (c:SummaryCache) RETURN count(c) AS n")[0]["n"] == caches
+    assert graph._run(
+        "MATCH (c:Community) WHERE NOT ()-[:IN_COMMUNITY]->(c) RETURN count(c) AS n")[0]["n"] == 0
+
+
+@needs_neo4j
+def test_a_deleted_repo_can_be_added_again(world):
+    repo_jobs.add(world["url"], "alice")
+    repo_jobs.delete("shop", "alice")
+    assert repo_jobs.add(world["url"], "alice") == "shop"
+    assert _row("shop")["symbols"] == 3
+
+
+@needs_neo4j
+def test_a_mounted_repo_keeps_its_files(world):
+    mounted = world["tmp"] / "repos" / "local"
+    mounted.mkdir()
+    (mounted / "m.py").write_text("def f():\n    return 1\n")
+    repo_jobs.refresh("local", "alice")
+    r = repo_jobs.delete("local", "alice")
+    assert r["mounted_files_kept"] is True and (mounted / "m.py").exists()
+    assert repo_jobs.list_repos("alice") == []
+
+
+@needs_neo4j
+def test_a_repo_being_indexed_cannot_be_deleted(world, monkeypatch):
+    monkeypatch.setattr(repo_jobs, "_pool", type("P", (), {"submit": lambda s, *a: None})())
+    repo_jobs.add(world["url"], "alice")  # queued, never run
+    with pytest.raises(repo_jobs.Busy, match="being indexed"):
+        repo_jobs.delete("shop", "alice")
+
+
+@pytest.mark.parametrize("name", ["../etc", "a/b", "", ".."])
+def test_delete_refuses_anything_but_a_plain_name(name):
+    with pytest.raises(ValueError):
+        repo_jobs.delete(name, "alice")
+
+
+@needs_neo4j
+def test_the_api_requires_the_name_typed_again(world, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("AUTH_MODE", "none")
+    import main
+
+    repo_jobs.add(world["url"], "alice")
+    c = TestClient(main.app)
+    assert c.delete("/repos/shop").status_code == 400
+    assert c.delete("/repos/shop", params={"confirm": "Shop"}).status_code == 400
+    assert _row("shop")["symbols"] == 3  # nothing deleted
+    r = c.delete("/repos/shop", params={"confirm": "shop"})
+    assert r.status_code == 200 and r.json()["symbols"] == 3

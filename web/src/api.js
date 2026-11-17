@@ -101,3 +101,9 @@ export async function deleteSession(id) {
   const r = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
   return unwrap(r, "Deleting the conversation");
 }
+
+export async function deleteRepo(name) {
+  const query = new URLSearchParams({ confirm: name });
+  const r = await fetch(`${BASE}/repos/${encodeURIComponent(name)}?${query}`, { method: "DELETE" });
+  return unwrap(r, "Deleting the repository");
+}

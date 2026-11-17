@@ -275,6 +275,7 @@ Stop the main stack first if it is running; both use the same ports.
 | Ask tab, Blast radius mode, before an analysed refresh | "No new symbols or code to check blast radius", and the question box disabled |
 | Commit a change, then **Refresh and analyse** in Blast radius mode | "Change ready to check" with risk and counts; the report is listed in Review |
 | Ask tab, Security or Refactor mode | The answer follows that mode's format; the request carries only the mode's name |
+| Repos tab, **Delete**, type the name | The repo disappears from the list and its graph is gone; other repos are untouched |
 | Repos tab, Add and index | Stages shown in order (Cloning, Reading the code, Summarizing N of M, Grouping), then the symbol count and commit |
 | Repos tab, Refresh with no new commit | `Up to date at <commit>`, and no LLM calls |
 | Add a second repo while yours is indexing | Refused: you can start another when it finishes |
